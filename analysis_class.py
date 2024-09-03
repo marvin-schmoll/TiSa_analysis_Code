@@ -26,9 +26,10 @@ from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, 
 from tqdm import tqdm
 
 
-c = 2.99792458 * 10**8 # velocity of light [m/s]
-h = 4.135667696        # planck constant [eV*fs]
-omega_IR = 2.35        # [1/fs] (for 800nm)
+c = 2.99792458 * 10**8  # velocity of light [m/s]
+h = 4.135667696         # planck constant [eV*fs]
+omega_IR = 2.35         # [1/fs] (for 800nm)
+m_e = 5.68563 * 10**-12 # electron mass [eV/(m/s)^2]
 
 E_IR = h / (2*np.pi) * omega_IR   # [eV]
 
@@ -59,7 +60,7 @@ class RABBITT_scan():
         self.scan = self.inverted_scan = None                                   # collection of 2D images before and after Abel inversion
         self.speed_distributions = self.speed_distribution = None               # speed distributions obtained from angular integration of inverted images, single speed distribution integrated over array
         self.speed_distributions_jacobi = self.speed_distribution_jacobi = None # same, multiplied by jacobi determinant
-        self.speed_axis = self.energies = None                                  # axes for the photoelectron spectrum, speed in samples, energy in eV
+        self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
         self.min_energy, self.max_energy = 0, 20 # TODO: possibility to change  # energy limits in eV used for plotting
         self.times = None                                                       # time axis [fs]
  
@@ -99,7 +100,8 @@ class RABBITT_scan():
         elif unit.lower() in {'e', 'energy', 'ev', 'j'}:
             return self.energies, 'energy [eV]', False
         
-        #TODO: one could implement a velocity axis as well
+        elif unit.lower() in {'v', 'velocity', 'm/s', 'km/s'}:
+            return self.velocity_axis, 'velocity [km/s]', False
 
         else: raise ValueError('Given axis type not supported, try e.g. "speed" or "energy"')
 
@@ -132,13 +134,14 @@ class RABBITT_scan():
         else:     self.scan = scan.T
     
 
-    def plot_VMI_image(self, image, cmap='viridis', saving=False):
+    def plot_VMI_image(self, image, cmap='viridis', saving=False, upper_clim=None):
         '''plots a single VMI image'''
         
-        plt.figure()
         plt.matshow(image, cmap=cmap)
+        plt.xlabel('pixels')
+        plt.ylabel('pixels')
         plt.colorbar()
-        plt.clim(0,None)
+        plt.clim(0, upper_clim)
         
         if saving is True or saving == "pdf":
             plt.savefig('vmi_image.pdf')
@@ -263,11 +266,13 @@ class RABBITT_scan():
         plt.figure(num='Speed curve-fit', clear=True)
         plt.plot(peaks, 'x')
         plt.plot(plotrange, velocity(plotrange, *popt))
+        plt.xlabel('energy [eV]')
         plt.ylabel('speed (samples)')
         plt.show()
         
-        self.speed_axis = np.arange(len(self.speed_distribution))  # [samples]
-        self.energies = self.speed_axis**2 * E_IR / popt[0]        # [eV]
+        self.speed_axis = np.arange(len(self.speed_distribution))   # [samples]
+        self.energies = self.speed_axis**2 * E_IR / popt[0]         # [eV]
+        self.velocity_axis = np.sqrt(2 * self.energies / m_e) / 1e3 # [km/s]
         
         # Multiplying by Jacobi determinant for plotting of PES
         self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
@@ -328,6 +333,8 @@ if __name__ == "__main__":
     hasi.perform_abel_inversion()
     hasi.energy_scale()
     hasi.time_scale(0.01)
+    
+    hasi.plot_RABBITT_trace(hasi.speed_distributions, delay_unit='fs', energy_unit='v')
     hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
         
         
