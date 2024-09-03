@@ -132,13 +132,19 @@ class RABBITT_scan():
         else:     self.scan = scan.T
     
 
-    def plot_VMI_image(self, image):
+    def plot_VMI_image(self, image, cmap='viridis', saving=False):
         '''plots a single VMI image'''
         
         plt.figure()
-        plt.matshow(image, cmap='viridis')
+        plt.matshow(image, cmap=cmap)
         plt.colorbar()
         plt.clim(0,None)
+        
+        if saving is True or saving == "pdf":
+            plt.savefig('vmi_image.pdf')
+        elif  saving == "png":
+            plt.savefig('vmi_image.png', dpi=300)
+        
         plt.show()
 
 
@@ -301,8 +307,10 @@ class RABBITT_scan():
         plt.xlabel(x_label)
         plt.ylabel(y_label)
         
-        if saving is True:
+        if saving is True or saving == "pdf":
             plt.savefig('trace.pdf')
+        elif  saving == "png":
+            plt.savefig('trace.png', dpi=300)
         
         plt.show()     
 
@@ -312,15 +320,15 @@ class RABBITT_scan():
         
         
 #%%
-        
-hasi = RABBITT_scan()
-hasi.read_scan_files()
-hasi.perform_abel_inversion()
-hasi.energy_scale()
-hasi.time_scale(0.01)
-hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
-        
-        
+
+if __name__ == "__main__":
+
+    hasi = RABBITT_scan()
+    hasi.read_scan_files()
+    hasi.perform_abel_inversion()
+    hasi.energy_scale()
+    hasi.time_scale(0.01)
+    hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
         
         
         
