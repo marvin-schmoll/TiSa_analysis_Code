@@ -104,6 +104,23 @@ class RABBITT_scan():
             return self.velocity_axis, 'velocity [km/s]', False
 
         else: raise ValueError('Given axis type not supported, try e.g. "speed" or "energy"')
+    
+    
+    def set_energy_limit(self, limit=None, left_limit=None):
+        '''allows to set an energy limit up to which structure is visible in the spectrum
+            this will be used as axis limit in all plots'''
+
+        if limit is None:
+            self.max_energy = float(np.max(self.energies))
+        else:
+            self.max_energy = float(limit)
+        assert isinstance(self.max_energy, float), "energy limit has to be float"
+
+        if left_limit is None:
+            self.min_energy = float(0)
+        else:
+            self.min_energy = float(left_limit)
+        assert isinstance(self.min_energy, float), "left energy limit has to be float"
 
 
     def read_scan_files(self):
@@ -239,6 +256,7 @@ class RABBITT_scan():
  
         
     def energy_scale(self):
+        '''perform curve fit to determine energy axis'''
         
         if self.speed_distributions is None:
             message = "Perform Abel inversion first to get speed distribution."
