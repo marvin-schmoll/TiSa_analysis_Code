@@ -54,8 +54,10 @@ def normalized(array, normalization='max'):
 
 class RABBITT_scan():
     
-    def __init__(self):
+    def __init__(self, name=None):
         '''currently empty as functionality is tranferred to the class'''
+        
+        self.name = name
         
         self.scan = self.inverted_scan = None                                   # collection of 2D images before and after Abel inversion
         self.speed_distributions = self.speed_distribution = None               # speed distributions obtained from angular integration of inverted images, single speed distribution integrated over array
@@ -63,6 +65,13 @@ class RABBITT_scan():
         self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
         self.min_energy, self.max_energy = 0, 20 # TODO: possibility to change  # energy limits in eV used for plotting
         self.times = None                                                       # time axis [fs]
+        
+        self.data_norm = self.data_diff = None                                  # speed distributions normalized and speed distribution differences from average
+        
+        self.phase_by_energy = self.phase_by_energy_error = np.array([])        # oscillation phase and uncertainty
+        self.depth_by_energy = self.depth_by_energy_error = np.array([])        # oscillation depth and uncertainty
+        self.slope_by_energy = self.slope_by_energy_error = np.array([])        # slope for oscillation reconstruction and uncertainty
+        self.contrast_by_energy = self.contrast_by_energy_error = np.array([])  # oscillation contrast and uncertainty
  
       
     def _rainbow_colors(self, length, darken=1):
@@ -73,6 +82,14 @@ class RABBITT_scan():
         colors_sat = colors
         colors_sat[:,:3] = colors[:,:3] / darken   # darken colors for better visibility
         return colors_sat
+    
+    
+    def _prefix(self):
+        '''changes the name like "name: " to create separate plots for each intance of the class'''
+        if self.name is None or self.name == '':
+            return ''
+        else:
+            return str(self.name) + ': '
 
 
     def _delay_axis(self, unit='n'):
@@ -297,6 +314,15 @@ class RABBITT_scan():
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
     
     
+    def prepare_analysis(self):
+        '''normalizes data in a way that is useful for the rabbitt-analysis'''
+        
+        # Normalize signal for each delay step
+        self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
+        
+        #
+        self.data_diff = self.data_norm - normalized(np.nansum(self.data_norm, axis=0), 'sum')
+    
     def time_scale(self, step):
         '''define the time axis given the steps size for the piezo in microns'''
         
@@ -336,6 +362,154 @@ class RABBITT_scan():
             plt.savefig('trace.png', dpi=300)
         
         plt.show()     
+
+
+    def plot_phase_diagram(self, indicator='points', show_amplitude=False, 
+                           left=[], right=[], show_errors=False):
+        '''plots the phase by energy
+            indicator ("points", "range", or "none") specifies which indication for sideband
+            positions should be shown'''
+
+        #if len(self.phase_by_energy) == 0:   # "self.phase_by_energy" was never defined
+        #    self.do_fourier_transform(plotting=False)
+
+        fig, ax1 = plt.subplots(num=(self._prefix() + 'Phases'), clear=True)
+        ax1.plot(self.energies, self.phase_by_energy, 'x-', color='k')
+        ax1.tick_params(axis='both', which='major')
+        ax1.set_xlabel('photoelectron energy [eV]')
+        ax1.set_ylabel('phase [rad]')
+
+        if show_amplitude ==  True:
+            ax2 = ax1.twinx()
+            ax2.plot(self.energies, self.depth_by_energy, 'x-', color='grey')
+            ax2.tick_params(axis='both', which='major')
+            ax2.set_ylabel('modul. amp. (a.u.)', color='grey')
+            highest = np.max(self.depth_by_energy)
+            ax1.set_ylim([-1.8*np.pi, 1.05*np.pi])  # avoid overlap
+            ax2.set_ylim([0, 2.5*highest])  # avoid overlap
+            
+        if show_errors == True:
+            upper_bound = self.phase_by_energy + self.phase_by_energy_error
+            lower_bound = self.phase_by_energy - self.phase_by_energy_error
+            ax1.fill_between(self.energies, upper_bound, lower_bound, color='gray')
+
+        # TODO: reactivate when harmonic selection is implemented
+        #if indicator == 'points':   # draw points for the harmonic and sideband locations
+        #    ax1.plot(self.energies[self.harmonics], self.phase_by_energy[self.harmonics], 'o', color='orange', label='HH')
+        #    ax1.plot(self.energies[self.sidebands], self.phase_by_energy[self.sidebands], 'o', color='green', label='SB')
+        #
+        #if indicator == 'range':   # color points ascribed to each sideband in different colors
+        #    colors = self._rainbow_colors(len(left), 1.0)   # spectral colormap from red to blue
+        #    colors_sat = self._rainbow_colors(len(left), 1.3)   # spectral colormap from red to blue
+        #    for i in range(len(left)):
+        #        ax1.plot(self.energies[left[i]:right[i]], self.phase_by_energy[left[i]:right[i]],
+        #                 'x-', label=self.SB_names[i], color=colors_sat[i])
+        #        if show_amplitude  == True:
+        #            ax2.plot(self.energies[left[i]:right[i]], self.depth_by_energy[left[i]:right[i]],
+        #                     'x-', color=colors[i], alpha=0.5)
+
+        plt.xlim([self.min_energy, self.max_energy])
+        plt.legend(loc='upper right')
+        fig.tight_layout()
+        #plt.savefig('favorite_plot.png', dpi=400)    # TODO: saving parameter
+        fig.show()
+
+
+    def do_cosine_fit(self, plotting=True, omega=False, integrate=1):
+        '''does a cosine fit for each energy bin and extracts the phase of the 2-omega-component
+            omega=True tries to fit the 1-omega-component instead'''
+        
+        if self.data_diff is None:
+            self.prepare_analysis()  # Calculate difference dataset expected by curve fit
+
+        self.phase_by_energy = np.array([])  # oscillation phase
+        self.depth_by_energy = np.array([])  # oscillation amplitude
+        self.slope_by_energy = np.array([])  # slope of the background
+        self.phase_by_energy_error = np.array([])
+        self.depth_by_energy_error = np.array([])
+        self.slope_by_energy_error = np.array([])
+        
+        if omega is True:
+            def cos(t, phi, a, b): # fittable cosine with linear background
+                return a * np.cos(omega_IR * t - phi) + b * t
+        else:
+            def cos(t, phi, a, b): # fittable cosine with linear background
+                return a * np.cos(2 * omega_IR * t - phi) + b * t
+
+        if integrate == 1:
+            for single_line in self.data_diff.T:
+                
+                try:
+                    ### perform cosine fit ###
+                    popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
+                    perr = np.sqrt(np.diag(pcov))
+                    print(popt)
+        
+                    ### write down phase parameters ###
+                    if popt[1] > 0:
+                        self.phase_by_energy = np.append(self.phase_by_energy, (popt[0]+np.pi)%(2*np.pi)-np.pi)
+                    else:
+                        self.phase_by_energy = np.append(self.phase_by_energy, (popt[0])%(2*np.pi)-np.pi)
+                    self.phase_by_energy_error = np.append(self.phase_by_energy_error, perr[0])
+        
+                    self.depth_by_energy = np.append(self.depth_by_energy, np.abs(popt[1]))
+                    self.depth_by_energy_error = np.append(self.depth_by_energy_error, perr[1])
+        
+                    self.slope_by_energy = np.append(self.slope_by_energy, popt[2])
+                    self.slope_by_energy_error = np.append(self.slope_by_energy_error, perr[2])
+                
+                except ValueError:
+                    self.phase_by_energy = np.append(self.phase_by_energy, np.nan)
+                    self.phase_by_energy_error = np.append(self.phase_by_energy_error, np.nan)
+        
+                    self.depth_by_energy = np.append(self.depth_by_energy, np.nan)
+                    self.depth_by_energy_error = np.append(self.depth_by_energy_error, np.nan)
+        
+                    self.slope_by_energy = np.append(self.slope_by_energy, np.nan)
+                    self.slope_by_energy_error = np.append(self.slope_by_energy_error, np.nan)
+                
+        if integrate > 1:
+            for i in range(int(len(self.data_diff.T)/integrate)):
+                single_line = (self.data_diff.T[i*integrate:(i+1)*integrate]).sum(axis=0)
+                
+                try:
+                    ### perform cosine fit ###
+                    popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
+                    perr = np.sqrt(np.diag(pcov))
+                    print(popt)
+        
+                    ### write down phase parameters ###
+                    if popt[1] > 0:
+                        self.phase_by_energy = np.append(self.phase_by_energy, (popt[0]+np.pi)%(2*np.pi)-np.pi)
+                    else:
+                        self.phase_by_energy = np.append(self.phase_by_energy, (popt[0])%(2*np.pi)-np.pi)
+                    self.phase_by_energy_error = np.append(self.phase_by_energy_error, perr[0])
+        
+                    self.depth_by_energy = np.append(self.depth_by_energy, np.abs(popt[1]))
+                    self.depth_by_energy_error = np.append(self.depth_by_energy_error, perr[1])
+        
+                    self.slope_by_energy = np.append(self.slope_by_energy, popt[2])
+                    self.slope_by_energy_error = np.append(self.slope_by_energy_error, perr[2])
+                    
+                except ValueError:
+                    self.phase_by_energy = np.append(self.phase_by_energy, np.nan)
+                    self.phase_by_energy_error = np.append(self.phase_by_energy_error, np.nan)
+        
+                    self.depth_by_energy = np.append(self.depth_by_energy, np.nan)
+                    self.depth_by_energy_error = np.append(self.depth_by_energy_error, np.nan)
+        
+                    self.slope_by_energy = np.append(self.slope_by_energy, np.nan)
+                    self.slope_by_energy_error = np.append(self.slope_by_energy_error, np.nan)
+                    
+        # TODO: reactivate when ready
+        #self.contrast_by_energy = self.depth_by_energy / self.energy_graph_norm
+        #self.contrast_by_energy_error = self.depth_by_energy_error / self.energy_graph_norm
+
+        # show corresponding plot
+        if plotting == True:
+            self.plot_phase_diagram(indicator='points', show_amplitude=True, show_errors=True)
+
+        return self.phase_by_energy
 
         
         
