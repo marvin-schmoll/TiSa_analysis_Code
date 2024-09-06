@@ -52,6 +52,7 @@ def normalized(array, normalization='max'):
 
 
 
+
 class RABBITT_scan():
     
     def __init__(self, name=None):
@@ -73,6 +74,7 @@ class RABBITT_scan():
         self.slope_by_energy = self.slope_by_energy_error = np.array([])        # slope for oscillation reconstruction and uncertainty
         self.contrast_by_energy = self.contrast_by_energy_error = np.array([])  # oscillation contrast and uncertainty
  
+    
       
     def _rainbow_colors(self, length, darken=1):
         '''creates a set of "length" colors from red to blue
@@ -84,12 +86,14 @@ class RABBITT_scan():
         return colors_sat
     
     
+    
     def _prefix(self):
         '''changes the name like "name: " to create separate plots for each intance of the class'''
         if self.name is None or self.name == '':
             return ''
         else:
             return str(self.name) + ': '
+
 
 
     def _delay_axis(self, unit='n'):
@@ -105,6 +109,7 @@ class RABBITT_scan():
             return self.times, 'delay [fs]', True
 
         else: raise ValueError('Given axis type not supported, try e.g. "step" or "time"')
+        
         
 
     def _energy_axis(self, unit='n'):
@@ -123,6 +128,7 @@ class RABBITT_scan():
         else: raise ValueError('Given axis type not supported, try e.g. "speed" or "energy"')
     
     
+    
     def set_energy_limit(self, limit=None, left_limit=None):
         '''allows to set an energy limit up to which structure is visible in the spectrum
             this will be used as axis limit in all plots'''
@@ -138,6 +144,7 @@ class RABBITT_scan():
         else:
             self.min_energy = float(left_limit)
         assert isinstance(self.min_energy, float), "left energy limit has to be float"
+
 
 
     def read_scan_files(self):
@@ -168,6 +175,7 @@ class RABBITT_scan():
         else:     self.scan = scan.T
     
 
+
     def plot_VMI_image(self, image, cmap='viridis', saving=False, upper_clim=None):
         '''plots a single VMI image'''
         
@@ -185,6 +193,7 @@ class RABBITT_scan():
         plt.show()
 
 
+
     def save_scan_images_Daniel(self):
         '''saves the single images belonging to the scan as tsv-files
             (this is a legacy function for compatibility with Daniel script)'''
@@ -196,6 +205,7 @@ class RABBITT_scan():
         
         for i,image in enumerate(tqdm(self.scan)):
             np.savetxt(path+'/step'+str(i)+'.tsv', image.T, delimiter='\t', fmt='%d')
+
 
 
     def save_scan_images(self):
@@ -218,6 +228,7 @@ class RABBITT_scan():
                 f.create_dataset("scan", data=self.scan)
 
 
+
     def read_scan_images(self):
         '''Reads h5 or npy files containing the raw VMI images of the scan'''
             
@@ -237,6 +248,7 @@ class RABBITT_scan():
                 self.scan = np.array(f['scan'])        
 
 
+
     def check_oscillation_preliminary(self):
         '''checks the oscillation of a (as of now hardcoded) region in the image'''
         
@@ -248,6 +260,7 @@ class RABBITT_scan():
         plt.figure()
         plt.plot(intensities)
         plt.show()
+
 
 
     def perform_abel_inversion(self):
@@ -271,6 +284,7 @@ class RABBITT_scan():
             speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
             self.speed_distributions[i] = speeds[1][:600]
  
+    
         
     def energy_scale(self):
         '''perform curve fit to determine energy axis'''
@@ -314,6 +328,7 @@ class RABBITT_scan():
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
     
     
+    
     def prepare_analysis(self):
         '''normalizes data in a way that is useful for the rabbitt-analysis'''
         
@@ -328,6 +343,7 @@ class RABBITT_scan():
         
         delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
         self.times = np.arange(0, len(self.scan)*delta_t, delta_t)
+        
         
     
     def plot_RABBITT_trace(self, data_2D, fig_number=None, clabel='counts', cmap='jet', 
@@ -364,14 +380,15 @@ class RABBITT_scan():
         plt.show()     
 
 
+
     def plot_phase_diagram(self, indicator='points', show_amplitude=False, 
-                           left=[], right=[], show_errors=False):
+                           left=[], right=[], show_errors=False, saving=False):
         '''plots the phase by energy
             indicator ("points", "range", or "none") specifies which indication for sideband
             positions should be shown'''
 
-        #if len(self.phase_by_energy) == 0:   # "self.phase_by_energy" was never defined
-        #    self.do_fourier_transform(plotting=False)
+        if len(self.phase_by_energy) == 0:   # "self.phase_by_energy" was never defined
+            self.do_fourier_transform(plotting=False)
 
         fig, ax1 = plt.subplots(num=(self._prefix() + 'Phases'), clear=True)
         ax1.plot(self.energies, self.phase_by_energy, 'x-', color='k')
@@ -384,7 +401,7 @@ class RABBITT_scan():
             ax2.plot(self.energies, self.depth_by_energy, 'x-', color='grey')
             ax2.tick_params(axis='both', which='major')
             ax2.set_ylabel('modul. amp. (a.u.)', color='grey')
-            highest = np.max(self.depth_by_energy)
+            highest = np.nanmax(self.depth_by_energy)
             ax1.set_ylim([-1.8*np.pi, 1.05*np.pi])  # avoid overlap
             ax2.set_ylim([0, 2.5*highest])  # avoid overlap
             
@@ -411,8 +428,37 @@ class RABBITT_scan():
         plt.xlim([self.min_energy, self.max_energy])
         plt.legend(loc='upper right')
         fig.tight_layout()
-        #plt.savefig('favorite_plot.png', dpi=400)    # TODO: saving parameter
+        plt.savefig('favorite_plot.png', dpi=400)
         fig.show()
+
+
+    def do_fourier_transform(self, plotting=True):
+        '''does a fourier transform for each energy bin and extracts the phase of the 2-omega-component'''
+        
+        if self.data_diff is None:
+            self.prepare_analysis()  # Calculate difference dataset expected by curve fit
+
+        self.phase_by_energy = np.array([])  # oscillation phase
+        self.depth_by_energy = np.array([])  # oscillation amplitude
+        self.phase_by_energy_error = np.array([])  # oscillation phase
+        self.depth_by_energy_error = np.array([])  # oscillation amplitude
+        
+        # Perform all the Fourier transforms
+        fouriers = [np.fft.fft(single_line) for single_line in self.data_diff.T]
+        fourier_map = np.abs(fouriers)
+        fourier_phases = np.angle (fouriers)
+        fourier_spectrum = np.nansum(fourier_map, axis=0)
+        
+        # Find oscillation frequency and extract phase there
+        peak = np.argmax(fourier_spectrum[3:]) + 3
+        self.phase_by_energy = -fourier_phases.T[peak]
+        self.depth_by_energy = fourier_map[peak]
+
+        # show corresponding plot
+        if plotting == True:
+            self.plot_phase_diagram(indicator='points',  show_amplitude=True)
+
+        return self.phase_by_energy
 
 
     def do_cosine_fit(self, plotting=True, omega=False, integrate=1):
