@@ -1,8 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-Ti:Sa RABBITT Analysis Software
-Version 1.0
-01.08.2024
+Ti:Sa VMI Analysis Software
+(based on existing Code for K04) 
 
 @author: Marvin Schmoll
 marvin.schmoll@physik.uni-freiburg.de
@@ -43,10 +42,10 @@ def normalized(array, normalization='max'):
         "Normalization" decides, if the maximum or the sum of all values is set to one.'''
 
     if normalization in ['max', 'maximum', 'Maximum']:
-        return array / np.max(np.abs(array))
+        return array / np.nanmax(np.abs(array))
 
     if normalization in ['sum', 'Sum', 'int', 'integral', 'Integral']:
-        return array / np.sum(array)
+        return array / np.nansum(array)
 
     raise ValueError('Specify normalization convention as "maximum" or "sum"')
 
@@ -63,6 +62,7 @@ class RABBITT_scan():
         self.scan = self.inverted_scan = None                                   # collection of 2D images before and after Abel inversion
         self.speed_distributions = self.speed_distribution = None               # speed distributions obtained from angular integration of inverted images, single speed distribution integrated over array
         self.speed_distributions_jacobi = self.speed_distribution_jacobi = None # same, multiplied by jacobi determinant
+        self.speed_distribution_norm = None                                     # normalized speed distribution (integral is 1) 
         self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
         self.min_energy, self.max_energy = 0, 20 # TODO: possibility to change  # energy limits in eV used for plotting
         self.times = None                                                       # time axis [fs]
@@ -298,7 +298,7 @@ class RABBITT_scan():
         
         self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
         peaks, properties = scipy.signal.find_peaks(self.speed_distribution, 
-                                                    height=0.1, prominence=0.1, width=10)
+                                                    height=0.1, prominence=0.1, width=5)
         
         plt.figure(num='Speed distribution', clear=True)
         plt.plot(self.speed_distribution)
@@ -331,6 +331,8 @@ class RABBITT_scan():
     
     def prepare_analysis(self):
         '''normalizes data in a way that is useful for the rabbitt-analysis'''
+        
+        self.speed_distribution_norm = normalized(self.speed_distribution_jacobi, 'sum')
         
         # Normalize signal for each delay step
         self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
@@ -547,9 +549,8 @@ class RABBITT_scan():
                     self.slope_by_energy = np.append(self.slope_by_energy, np.nan)
                     self.slope_by_energy_error = np.append(self.slope_by_energy_error, np.nan)
                     
-        # TODO: reactivate when ready
-        #self.contrast_by_energy = self.depth_by_energy / self.energy_graph_norm
-        #self.contrast_by_energy_error = self.depth_by_energy_error / self.energy_graph_norm
+        self.contrast_by_energy = self.depth_by_energy / self.speed_distribution_norm
+        self.contrast_by_energy_error = self.depth_by_energy_error / self.speed_distribution_norm
 
         # show corresponding plot
         if plotting == True:
