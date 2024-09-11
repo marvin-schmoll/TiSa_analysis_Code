@@ -64,7 +64,7 @@ class RABBITT_scan():
         self.speed_distributions_jacobi = self.speed_distribution_jacobi = None # same, multiplied by jacobi determinant
         self.speed_distribution_norm = None                                     # normalized speed distribution (integral is 1) 
         self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
-        self.min_energy, self.max_energy = 0, 20 # TODO: possibility to change  # energy limits in eV used for plotting
+        self.min_energy, self.max_energy = 0, 20                                # energy limits in eV used for plotting
         self.times = None                                                       # time axis [fs]
         
         self.data_norm = self.data_diff = None                                  # speed distributions normalized and speed distribution differences from average
@@ -269,7 +269,17 @@ class RABBITT_scan():
 
 
     def check_oscillation_preliminary(self):
-        '''checks the oscillation of a (as of now hardcoded) region in the image'''
+        """
+        Checks the oscillation of a (as of now hardcoded) region in the image.
+        
+        Legacy function for quick checks of newly acquired data without Abel inversion.
+        
+
+        Returns
+        -------
+        None.
+
+        """
         
         intensities = np.zeros(len(self.scan))
         
@@ -282,9 +292,22 @@ class RABBITT_scan():
 
 
 
-    def perform_abel_inversion(self):
-        '''performs an abel inversion of the individual VMI immages 
-            to obtain the spped distributions'''
+    def perform_abel_inversion(self, origin=(998,610)):
+        """
+        Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
+        
+        Uses the PyAbel-implementation of the rbasex-method.
+
+        Parameters
+        ----------
+        origin : 2-tuple of int, optional
+            Image center in pixels. The default is (998,610).
+
+        Returns
+        -------
+        None.
+
+        """
         
         if self.scan is None:
             message = "No scan loaded to perform Abel inversion on."
@@ -292,8 +315,6 @@ class RABBITT_scan():
         
         self.inverted_scan = np.zeros((len(self.scan),1920,1199))
         self.speed_distributions = np.zeros((len(self.scan),600))
-        
-        origin = (998,610)  # TODO: hardcoded bad bad bad
         
         for i, VMI_image in tqdm(enumerate(self.scan), total=len(self.scan)):
             recon = abel.Transform(VMI_image, direction='inverse', method='rbasex',
@@ -305,7 +326,7 @@ class RABBITT_scan():
  
     
         
-    def energy_scale(self):
+    def energy_scale(self, max_pixel=550):
         '''perform curve fit to determine energy axis'''
         
         if self.speed_distributions is None:
@@ -316,7 +337,7 @@ class RABBITT_scan():
             return np.sqrt(a * (n+b))   # output in [samples]
         
         self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
-        peaks, properties = scipy.signal.find_peaks(self.speed_distribution, 
+        peaks, properties = scipy.signal.find_peaks(self.speed_distribution[0:max_pixel], 
                                                     height=0.1, prominence=0.1, width=5)
         
         plt.figure(num='Speed distribution', clear=True)
@@ -345,6 +366,26 @@ class RABBITT_scan():
         # Multiplying by Jacobi determinant for plotting of PES
         self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
+        
+    
+    
+    def time_scale(self, step):
+        """
+        Define the time axis given the steps size for the piezo in microns.
+
+        Parameters
+        ----------
+        step : float
+            Step size used by the piezo in µm.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
+        self.times = np.arange(0, len(self.scan)*delta_t, delta_t)
     
     
     
@@ -359,13 +400,7 @@ class RABBITT_scan():
         #
         self.data_diff = self.data_norm - normalized(np.nansum(self.data_norm, axis=0), 'sum')
     
-    def time_scale(self, step):
-        '''define the time axis given the steps size for the piezo in microns'''
-        
-        delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
-        self.times = np.arange(0, len(self.scan)*delta_t, delta_t)
-        
-        
+       
     
     def plot_RABBITT_trace(self, data_2D, fig_number=None, clabel='counts', cmap='jet', 
                            delay_unit='n', energy_unit='n', clim=None, saving=False, figsize=None):
