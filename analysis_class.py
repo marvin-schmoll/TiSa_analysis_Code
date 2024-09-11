@@ -147,15 +147,34 @@ class RABBITT_scan():
 
 
 
-    def read_scan_files(self):
-        '''reads a selection of h5-files corresponding to a scan
-            and averages them'''
-    
-        root = tk.Tk()
-        root.withdraw()
-        files = askopenfilenames(title='Select image files')
-        bfile = askopenfilename(title='Select background file')
-        root.destroy()
+    def read_scan_files(self, files=None, bfile=''):
+        """
+        Reads a selection of h5-files corresponding to a scan and averages them.
+
+        Parameters
+        ----------
+        files : str or list of str, optional
+            Specify the file or files containing the scan data. 
+            The default is None, which opens a dialog to select the files.
+        bfile : str, optional
+            Specify the file containing a background scan. 
+            Only relevant when 'files' is not None.
+            The default is '', which disables background subtraction.
+
+        Returns
+        -------
+        None.
+
+        """
+        if type(files) is str:
+            files = [files]
+        
+        if files is None:
+            root = tk.Tk()
+            root.withdraw()
+            files = askopenfilenames(title='Select image files')
+            bfile = askopenfilename(title='Select background file')
+            root.destroy()
         
         if bfile: # only read if background was selected
             print('Reading background...')
@@ -360,7 +379,7 @@ class RABBITT_scan():
         # works with nonuniform x-axis
         im = matplotlib.image.NonUniformImage(ax, interpolation='nearest', cmap=cmap, clim=clim)
         im.set_data(x_axis, y_axis, data_2D.T)
-        ax.images.append(im)
+        ax.add_image(im)
         ax.set_xlim(x_axis[0], x_axis[-1])
         ax.set_ylim(y_axis[0], y_axis[-1])
         ima = matplotlib.image.AxesImage(ax)
