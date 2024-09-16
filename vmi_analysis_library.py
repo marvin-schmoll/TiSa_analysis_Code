@@ -32,8 +32,8 @@ m_e = 5.68563 * 10**-12 # electron mass [eV/(m/s)^2]
 
 E_IR = h / (2*np.pi) * omega_IR   # [eV]
 
-ionization_energies = {'He+': 24.587, 'Ne+': 21.565, 'Ar+': 15.760, 'Kr+': 14.000, 'Xe+': 12.13,
-                       'CH4+': 13.6, 'CH3+': 14.8, 'CH2+': 15.8, 'CH+': 22.9} # in eV
+ionization_energies = {'He': 24.587, 'Ne': 21.565, 'Ar': 15.760, 'Kr': 14.000, 'Xe': 12.13,
+                       'CH4': 13.6, 'CH3': 14.8, 'CH2': 15.8, 'CH': 22.9} # in eV
 
 
 
@@ -54,9 +54,10 @@ def normalized(array, normalization='max'):
 
 class RABBITT_scan():
     
-    def __init__(self, name=None):
+    def __init__(self, gas, name=None):
         '''currently empty as functionality is tranferred to the class'''
         
+        self.gas, self.Ip = gas, ionization_energies[gas]                       # gas used in the VMI, its ionization potential
         self.name = name
         
         self.scan = self.inverted_scan = None                                   # collection of 2D images before and after Abel inversion
@@ -66,6 +67,9 @@ class RABBITT_scan():
         self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
         self.min_energy, self.max_energy = 0, 20                                # energy limits in eV used for plotting
         self.times = None                                                       # time axis [fs]
+        
+        self.harmonics = self.sidebands = None                                  # pixel positions of HH/SB-peaks
+        self.n_harmonics = self.n_sidebands = None                              # order of HH/SB
         
         self.data_norm = self.data_diff = None                                  # speed distributions normalized and speed distribution differences from average
         
@@ -327,7 +331,22 @@ class RABBITT_scan():
     
         
     def energy_scale(self, max_pixel=550):
-        '''perform curve fit to determine energy axis'''
+        """
+        Performs curve fit to determine energy axis.
+        
+        Using the known ionization potential, the harmonics and sidebands are assigned.
+
+        Parameters
+        ----------
+        max_pixel : int, optional
+            Pixel up to which peaks can will be recognized as harmonics/sidebands. 
+            The default is 550.
+
+        Returns
+        -------
+        None.
+
+        """
         
         if self.speed_distributions is None:
             message = "Perform Abel inversion first to get speed distribution."
@@ -367,6 +386,16 @@ class RABBITT_scan():
         self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
         
+        # finding harmonics and sidebands
+        lowest_peak_energy = self.energies[peaks][0] + self.Ip
+        lowest_peak_order = np.argmin(np.abs(lowest_peak_energy - E_IR*np.arange(20)))
+        peak_orders = lowest_peak_order + np.arange(len(peaks))
+        off = lowest_peak_order % 2
+        self.harmonics = peaks[(1-off)::2]
+        self.n_harmonics = peak_orders[(1-off)::2]
+        self.sidebands = peaks[off::2]
+        self.n_sidebands = peak_orders[off::2]
+        
     
     
     def time_scale(self, step):
@@ -397,7 +426,7 @@ class RABBITT_scan():
         # Normalize signal for each delay step
         self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
         
-        #
+        # Calculate changes from average signal
         self.data_diff = self.data_norm - normalized(np.nansum(self.data_norm, axis=0), 'sum')
     
        
@@ -466,11 +495,11 @@ class RABBITT_scan():
             lower_bound = self.phase_by_energy - self.phase_by_energy_error
             ax1.fill_between(self.energies, upper_bound, lower_bound, color='gray')
 
+        if indicator == 'points':   # draw points for the harmonic and sideband locations
+            ax1.plot(self.energies[self.harmonics], self.phase_by_energy[self.harmonics], 'o', color='orange', label='HH')
+            ax1.plot(self.energies[self.sidebands], self.phase_by_energy[self.sidebands], 'o', color='green', label='SB')
+        
         # TODO: reactivate when harmonic selection is implemented
-        #if indicator == 'points':   # draw points for the harmonic and sideband locations
-        #    ax1.plot(self.energies[self.harmonics], self.phase_by_energy[self.harmonics], 'o', color='orange', label='HH')
-        #    ax1.plot(self.energies[self.sidebands], self.phase_by_energy[self.sidebands], 'o', color='green', label='SB')
-        #
         #if indicator == 'range':   # color points ascribed to each sideband in different colors
         #    colors = self._rainbow_colors(len(left), 1.0)   # spectral colormap from red to blue
         #    colors_sat = self._rainbow_colors(len(left), 1.3)   # spectral colormap from red to blue
@@ -621,7 +650,7 @@ class RABBITT_scan():
 
 if __name__ == "__main__":
 
-    hasi = RABBITT_scan()
+    hasi = RABBITT_scan('Ar')
     hasi.read_scan_files()
     hasi.perform_abel_inversion()
     hasi.energy_scale()
