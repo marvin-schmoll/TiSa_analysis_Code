@@ -28,7 +28,7 @@ distance_from_focus = 1.37       #*** distance between grating and VMI focus [m]
 alpha = 85.3 / 180 * np.pi       # grating incidence angle [rad]
 spatial_scale = 43.3 * 10**(-6)  # camera spatial scale [m/pixel]
 lambda_IR = 786 * 10**(-9)       # wavelength [m]
-#X_0 = -9310                      #*** offset between spectrometer zero and actual zero-order [pixels]
+#X_0 = 2911                      #*** offset between spectrometer zero and actual zero-order [pixels]
 
 
 
@@ -52,7 +52,7 @@ def plot_2D(intensity_data, plot_title='', HH_locs=[], HH_numbers=[], saving=Fal
     # calculate divergence for y-label
     dimy, dimx = intensity_data.shape
     scale = spatial_scale / distance_from_focus * dimy   # see Excel-sheet
-    ylabels = np.array([-10, -8, -6, -4, -2, 0, 2, 4, 6, 8, 10])
+    ylabels = np.array([-15, -12.5, -10, -7.5, -5, -2.5, 0, 2.5, 5, 7.5, 10, 12.5, 15])
     ypositions    =  (-ylabels/scale + dimy/2)
     plt.yticks(ypositions, ylabels)
     plt.ylabel('divergence [mrad]')
@@ -74,24 +74,48 @@ def plot_2D(intensity_data, plot_title='', HH_locs=[], HH_numbers=[], saving=Fal
 
 
 
-def read_MCP_data(folder, file, background_file=None, plotting=True):
-    '''Reads in the MCP data from the h5-files provided by LabVIEW 
-        and returns it as NumPy-array
+def read_MCP_data(file=None, background_file='', plotting=True):
+    """
+    Reads in the MCP data from the h5-files provided by LabVIEW and returns it as NumPy-array.
         This method averages over multiple images into one.
-    '''
+
+    Parameters
+    ----------
+    file : str, optional
+        Specify the file containing the HHG-spectra. 
+        The default is None, which opens a dialog to select the files.
+    background_file : str, optional
+        Specify a second file containing a background spectrum. 
+        Only relevant when 'files' is not None.
+        The default is '', which uses the internal background dataset of the h5-file.
+    plotting : bool, optional
+        If true, the image will be plotted. The default is True.
+
+    Returns
+    -------
+    MCP_data : np.array (2D)
+        Pixel data read from the specified file after background subtraction.
+
+    """
+    # open dialog to select files
+    if file is None:
+        root = tk.Tk()
+        root.withdraw()
+        file = askopenfilename(title='Select HHG spectrum file')
+        background_file = askopenfilename(title='Select background file')
+        root.destroy()
     
     # read file
-    f = h5py.File(folder + file)
+    f = h5py.File(file)
     raw_MCP_data = np.array(f['Images']).mean(axis=2)
     
     # subtract background
-    if background_file is None:
-        MCP_data = raw_MCP_data - np.array(f['Background Image'])
-    else:
-        b = h5py.File(folder + background_file)
+    if background_file:
+        b = h5py.File(background_file)
         MCP_data = raw_MCP_data - np.array(b['Images']).mean(axis=2)
+    else:
+        MCP_data = raw_MCP_data - np.array(f['Background Image'])
             
-        
     # plot image if requested
     if plotting == True:
         plot_2D(MCP_data, file)
@@ -99,27 +123,59 @@ def read_MCP_data(folder, file, background_file=None, plotting=True):
     return MCP_data
 
 
-def save_MCP_data(folder, file, MCP_data,  HH_locs=[], HH_numbers=[]):
+def save_MCP_data(MCP_data, path=None, HH_locs=[], HH_numbers=[]):
+    """
+    Saves the data in txt- or h5-format.
 
-    file = file[:-3] + 'txt'
+    Parameters
+    ----------
+    MCP_data : np.array (2D)
+        HHG-spectrum to save.
+    path : str, optional
+        Path of the new file to save. The default is None, which opens a file dialog.
+    HH_locs : arr of int, optional
+        Pixel numbers of harmonics. The default is [].
+    HH_numbers : arr of int, optional
+        Harmonic orders of harmonics. The default is [].
+
+    Returns
+    -------
+    None.
+
+    """
+    filetypes = [('HDF5 dataset','*.h5'), ('Text file','*.txt')]
     
+    if path is None or not (path[-4:] == '.txt' or path[-3:] == '.h5'): 
+        root = tk.Tk()
+        root.withdraw()
+        path = asksaveasfilename(title='Save as', defaultextension=".txt", 
+                                 filetypes=filetypes)
+        root.destroy()    
+
     dimy, dimx = MCP_data.shape
     scale = spatial_scale / distance_from_focus * dimx
     divergence_axis = (int(dimy/2)-np.arange(dimy))*scale
-    composite_array = np.concatenate((np.array([divergence_axis]), MCP_data.T)).T
+    
+    if path[-4:] == '.txt':
+        composite_array = np.concatenate((np.array([divergence_axis]), MCP_data.T)).T
+        headertext = 'MCP Spectrum \n first column: divergence axis [mrad] \n other collumns: pixel intensity [arb. units] (value 1 = detector saturated) \n'
+        if len(HH_locs) > 0 and len(HH_numbers) > 0:   # add indicator where harmonics are
+            headertext += 'Found harmonics (via peak finder): \n Harmonic order:         \t'
+            for i in range(len(HH_numbers)):
+                headertext += str(HH_numbers[i]) + '   \t'
+            headertext += ' \n Peak position [pixels]: \t'
+            for i in range(len(HH_locs)):
+                headertext += str(HH_locs[i]) + ' \t'
+        np.savetxt(path, composite_array, header=headertext)
+    
+    if path[-3:] == '.h5':
+        with h5py.File(path, "w") as f:
+            f.create_dataset("mcp_image", data=MCP_data)
+            f.create_dataset("divergence_axis", data=divergence_axis)
+            if len(HH_locs) > 0 and len(HH_numbers) > 0:
+                f.create_dataset("harmonics/pixel_positions", data=HH_locs)
+                f.create_dataset("harmonics/harm_orders", data=HH_numbers)
 
-    headertext = 'MCP Spectrum \n first column: divergence axis [mrad] \n other collumns: pixel intensity [arb. units] (value 1 = detector saturated) \n'
-    if len(HH_locs) > 0 and len(HH_numbers) > 0:   # add indicator where harmonics are
-        headertext += 'Found harmonics (via peak finder): \n Harmonic order:         \t'
-        for i in range(len(HH_numbers)):
-            headertext += str(HH_numbers[i]) + '   \t'
-        headertext += ' \n Peak position [pixels]: \t'
-        for i in range(len(HH_locs)):
-            headertext += str(HH_locs[i]) + ' \t'
-
-    np.savetxt((folder + file), composite_array, header=headertext)
-
-    return
 
 
 def calculate_spectrum(MCP_data, integrate=True, plotting=True, saving=False,
@@ -283,6 +339,6 @@ if __name__ == "__main__":
     file = '1240_05harmonics_power_1p4W_9832.h5'
     background_file = '1244_34harmonics_power_1p4W_9832_laserblocked.h5'
     
-    data = read_MCP_data(folder, file, background_file, plotting=True)
+    data = read_MCP_data(folder+file, folder+background_file, plotting=True)
     HH, left, right = peak_finder(data, distance=40, window_size=2, width=10, height=0.03)
     harm_number = HH_energy_scale(HH)
