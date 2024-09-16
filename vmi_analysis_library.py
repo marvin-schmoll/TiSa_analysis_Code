@@ -435,7 +435,11 @@ class RABBITT_scan():
     
     
     
+<<<<<<< HEAD
     def plot_oscillation(self, oscillation, labels=None, fig_number=None, delay_unit='fs', #TODO: Cleanup
+=======
+    def plot_oscillation(oscillation, labels=None, fig_number=None, delay_unit='fs', #TODO: Cleanup
+>>>>>>> refs/remotes/origin/main
                          size_hor=10, size_ver=8, saving=False):
         '''plots multiple oscillations in seperate subplots with line coloring showing their energies,
             each having a seperate axis indicating their relative intensity
