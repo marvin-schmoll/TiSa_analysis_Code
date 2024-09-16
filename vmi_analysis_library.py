@@ -70,6 +70,7 @@ class RABBITT_scan():
         
         self.harmonics = self.sidebands = None                                  # pixel positions of HH/SB-peaks
         self.n_harmonics = self.n_sidebands = None                              # order of HH/SB
+        self.left = self.right = None                                           # left and right edges of sidebands
         
         self.data_norm = self.data_diff = None                                  # speed distributions normalized and speed distribution differences from average
         
@@ -386,15 +387,17 @@ class RABBITT_scan():
         self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
         
-        # finding harmonics and sidebands
+        # finding and assigning harmonics and sidebands
         lowest_peak_energy = self.energies[peaks][0] + self.Ip
         lowest_peak_order = np.argmin(np.abs(lowest_peak_energy - E_IR*np.arange(20)))
         peak_orders = lowest_peak_order + np.arange(len(peaks))
         off = lowest_peak_order % 2
         self.harmonics = peaks[(1-off)::2]
         self.n_harmonics = peak_orders[(1-off)::2]
+        self.harmonic_names = np.array(['H' + H for H in np.array(self.n_harmonics, dtype=str)])
         self.sidebands = peaks[off::2]
         self.n_sidebands = peak_orders[off::2]
+        self.sideband_names = np.array(['SB' + S for S in np.array(self.n_sidebands, dtype=str)])
         
     
     
@@ -499,21 +502,20 @@ class RABBITT_scan():
             ax1.plot(self.energies[self.harmonics], self.phase_by_energy[self.harmonics], 'o', color='orange', label='HH')
             ax1.plot(self.energies[self.sidebands], self.phase_by_energy[self.sidebands], 'o', color='green', label='SB')
         
-        # TODO: reactivate when harmonic selection is implemented
-        #if indicator == 'range':   # color points ascribed to each sideband in different colors
-        #    colors = self._rainbow_colors(len(left), 1.0)   # spectral colormap from red to blue
-        #    colors_sat = self._rainbow_colors(len(left), 1.3)   # spectral colormap from red to blue
-        #    for i in range(len(left)):
-        #        ax1.plot(self.energies[left[i]:right[i]], self.phase_by_energy[left[i]:right[i]],
-        #                 'x-', label=self.SB_names[i], color=colors_sat[i])
-        #        if show_amplitude  == True:
-        #            ax2.plot(self.energies[left[i]:right[i]], self.depth_by_energy[left[i]:right[i]],
-        #                     'x-', color=colors[i], alpha=0.5)
+        if indicator == 'range':   # color points ascribed to each sideband in different colors
+            colors = self._rainbow_colors(len(left), 1.0)   # spectral colormap from red to blue
+            colors_sat = self._rainbow_colors(len(left), 1.3)   # spectral colormap from red to blue
+            for i in range(len(left)):
+                ax1.plot(self.energies[left[i]:right[i]], self.phase_by_energy[left[i]:right[i]],
+                         'x-', label=self.sideband_names[i], color=colors_sat[i])
+                if show_amplitude  == True:
+                    ax2.plot(self.energies[left[i]:right[i]], self.depth_by_energy[left[i]:right[i]],
+                             'x-', color=colors[i], alpha=0.5)
 
         plt.xlim([self.min_energy, self.max_energy])
-        plt.legend(loc='upper right')
+        ax1.legend(loc='upper right')
         fig.tight_layout()
-        plt.savefig('favorite_plot.png', dpi=400)
+        if saving: plt.savefig('favorite_plot.png', dpi=400)
         fig.show()
 
 
@@ -643,8 +645,66 @@ class RABBITT_scan():
 
         
         
+    def calculate_sideband_ranges(self, extent=None):
+        """
+        Calculates the positions and ranges of the sideband oscillations in terms of their modulation amplitude.
+
+        Parameters
+        ----------
+        extent : int, optional
+            If specified, the corresponding number of bins towards each side is used instead of the fitted ranges.
+
+        Raises
+        ------
+        AttributeError
+            If the modulation has not yet been characterized.
+
+        Returns
+        -------
+        np.array
+            Left bounds of the sidebands.
+        np.array
+            Right bounds of the sidebands.
+
+        """
+        '''calculates the FWHM-ranges of the sideband oscillations in terms of their modulation amplitude
+            if extent (integer) is specified, the corresponding number of bins towards each side is used instead'''
+
+        if len(self.phase_by_energy) == 0:   # "self.phase_by_energy" was never defined
+            message = "Perform cosine fit or fourier transform to obtain the oscillation amplitude."
+            raise AttributeError(message)
         
+        # find maxima in the modulation amplitude of the oscillations
+        peaks, properties = scipy.signal.find_peaks(normalized(self.depth_by_energy),  #TODO: maybe shoothing makes this more robust (?)
+                                                    height=0.25, width=10, rel_height=0.75)
         
+        off = int(np.abs(peaks[0] - self.sidebands[0]) > np.abs(peaks[1] - self.sidebands[0]))
+        self.sidebands = peaks[off::2]
+
+        if extent is None: # use FWHM ranges for the sidebands
+            left_ips = np.array(np.ceil(properties['left_ips']), dtype=int)
+            right_ips = np.array(np.ceil(properties['right_ips']), dtype=int)
+            self.left = left_ips[off::2]
+            self.right = right_ips[off::2]
+
+        else:  # use specified ranges
+            self.left  = self.sidebands - extent
+            self.right = self.sidebands + extent + 1
+
+        #TODO: this could eventually be used in nice plots
+        #cutted = np.split(self.data_diff, np.sort((self.left,self.right), axis=None), axis=1)[1::2]
+        #self.SB_oscillation = np.array([np.sum(cutted[i], axis=1) for i in range(len(cutted))])
+        #
+        #self.SB = np.array(self.lowest_harmonic + np.linspace(1, 2*len(self.sidebands)-1, len(self.sidebands)), dtype=int)
+        #self.SB_names = np.array(['SB' + S for S in np.array(self.SB, dtype=str)])
+        #self.plot_oscillation(self.SB_oscillation, self.SB_names, self._prefix() + 'Sideband Oscillation', size_hor=15, size_ver=12)
+        
+        self.plot_phase_diagram('range', True, self.left, self.right)
+
+        return self.left, self.right        
+
+
+
         
 #%%
 
@@ -658,6 +718,9 @@ if __name__ == "__main__":
     
     hasi.plot_RABBITT_trace(hasi.speed_distributions, delay_unit='fs', energy_unit='v')
     hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
+    
+    hasi.do_cosine_fit(plotting=False)
+    hasi.calculate_sideband_ranges()
         
         
         
