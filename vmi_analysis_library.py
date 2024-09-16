@@ -12,6 +12,7 @@ import h5py
 
 import numpy as np
 from matplotlib import pyplot as plt
+from matplotlib import gridspec
 import matplotlib.image
 import matplotlib.cm as cm
 import cmasher as cmr # makes better colormaps available, comment out if not installed
@@ -432,6 +433,63 @@ class RABBITT_scan():
         # Calculate changes from average signal
         self.data_diff = self.data_norm - normalized(np.nansum(self.data_norm, axis=0), 'sum')
     
+    
+    
+    def plot_oscillation(self, oscillation, labels=None, fig_number=None, delay_unit='fs', #TODO: Cleanup
+                         size_hor=10, size_ver=8, saving=False):
+        '''plots multiple oscillations in seperate subplots with line coloring showing their energies,
+            each having a seperate axis indicating their relative intensity
+            if only one is given, the function also works'''
+
+        x_axis, x_label, x_linarity = hasi._delay_axis(delay_unit)
+        plt.figure(num=fig_number, clear=True, figsize=(size_hor, size_ver))
+
+
+        # plot multiple oscillations in one figure
+        if len(np.shape(oscillation)) == 2:
+            gs = gridspec.GridSpec(len(oscillation), 1)
+            colors = hasi._rainbow_colors(len(oscillation), 1.3) # spectral colormap from red to blue
+            for i in range(len(oscillation)):
+                if i==0:
+                    ax0 = plt.subplot(gs[i])
+
+                    pl, = ax0.plot(x_axis, oscillation[len(oscillation)-1-i]*1e3, 'x-', 
+                                   lw=0.8, ms=6, color=colors[len(oscillation)-1-i])
+                    ax0.plot([x_axis[0],x_axis[-1]], [0,0], color='grey', lw=0.5)
+                    axl=ax0
+                else:
+                    axi = plt.subplot(gs[i], sharex=axl)
+
+                    pl, = axi.plot(x_axis, oscillation[len(oscillation)-1-i]*1e3, 'x-', 
+                                   lw=0.8, ms=6, color=colors[len(oscillation)-1-i])
+                    axi.plot([x_axis[0],x_axis[-1]], [0,0], color='grey', lw=0.5)
+
+                    yticks = axi.yaxis.get_major_ticks()
+                    yticks[-1].label1.set_visible(False)
+                    if i != len(oscillation) - 1:
+                        axi.tick_params(axis='x', labelbottom=False)
+                    axl=axi
+
+                if i==int(len(oscillation-1)/2): # put ylabel only on the middle plot
+                    plt.ylabel('count difference (a.u.) \n')
+
+                plt.grid(axis='x')
+                plt.legend([labels[len(oscillation)-1-i]], frameon=False, loc='upper left',
+                           bbox_to_anchor=(0.07-0.01*len(oscillation),1.03)) # change label position here !!
+
+            plt.setp(ax0.get_xticklabels(), visible=False)
+            plt.subplots_adjust(hspace=.0)
+
+        # plot just one oscillation
+        if len(np.shape(oscillation)) == 1:
+            plt.plot(x_axis, oscillation/np.max(np.abs(oscillation)), 'x-', color='b')
+
+        plt.xlabel(x_label)
+        plt.xlim([x_axis[0], x_axis[-1]])
+
+        if saving: plt.savefig('rabbitt_oscillation.pdf', dpi=400)
+        plt.show()        
+    
        
     
     def plot_RABBITT_trace(self, data_2D, fig_number=None, clabel='counts', cmap='jet', 
@@ -692,12 +750,11 @@ class RABBITT_scan():
             self.right = self.sidebands + extent + 1
 
         #TODO: this could eventually be used in nice plots
-        #cutted = np.split(self.data_diff, np.sort((self.left,self.right), axis=None), axis=1)[1::2]
-        #self.SB_oscillation = np.array([np.sum(cutted[i], axis=1) for i in range(len(cutted))])
+        cutted = np.split(self.data_diff, np.sort((self.left,self.right), axis=None), axis=1)[1::2]
+        self.SB_oscillation = np.array([np.sum(cutted[i], axis=1) for i in range(len(cutted))])
         #
         #self.SB = np.array(self.lowest_harmonic + np.linspace(1, 2*len(self.sidebands)-1, len(self.sidebands)), dtype=int)
         #self.SB_names = np.array(['SB' + S for S in np.array(self.SB, dtype=str)])
-        #self.plot_oscillation(self.SB_oscillation, self.SB_names, self._prefix() + 'Sideband Oscillation', size_hor=15, size_ver=12)
         
         self.plot_phase_diagram('range', True, self.left, self.right)
 
@@ -721,13 +778,9 @@ if __name__ == "__main__":
     
     hasi.do_cosine_fit(plotting=False)
     hasi.calculate_sideband_ranges()
+    hasi.plot_oscillation(hasi.SB_oscillation, hasi.sideband_names, hasi._prefix() + 'Sideband Oscillation')    
         
-        
-        
-        
-        
-        
-        
-        
+
+    
         
         
