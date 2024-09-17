@@ -72,6 +72,7 @@ class RABBITT_scan():
         self.harmonics = self.sidebands = None                                  # pixel positions of HH/SB-peaks
         self.n_harmonics = self.n_sidebands = None                              # order of HH/SB
         self.left = self.right = None                                           # left and right edges of sidebands
+        self.SB_oscillation = None                                              # signal oscillation averaged over each sideband
         
         self.data_norm = self.data_diff = None                                  # speed distributions normalized and speed distribution differences from average
         
@@ -91,15 +92,18 @@ class RABBITT_scan():
         colors_sat[:,:3] = colors[:,:3] / darken   # darken colors for better visibility
         return colors_sat
     
-    
-    
+        
     def _prefix(self):
         '''changes the name like "name: " to create separate plots for each intance of the class'''
         if self.name is None or self.name == '':
             return ''
         else:
             return str(self.name) + ': '
-
+    
+    
+    def _legend_name(self, order, pre='SB'):
+        '''returns names as 'SB14' for plot legends'''
+        return pre + str(order)
 
 
     def _delay_axis(self, unit='n'):
@@ -117,7 +121,6 @@ class RABBITT_scan():
         else: raise ValueError('Given axis type not supported, try e.g. "step" or "time"')
         
         
-
     def _energy_axis(self, unit='n'):
         '''private subfunction to allow
             for different units on the energy axis'''
@@ -395,10 +398,8 @@ class RABBITT_scan():
         off = lowest_peak_order % 2
         self.harmonics = peaks[(1-off)::2]
         self.n_harmonics = peak_orders[(1-off)::2]
-        self.harmonic_names = np.array(['H' + H for H in np.array(self.n_harmonics, dtype=str)])
         self.sidebands = peaks[off::2]
         self.n_sidebands = peak_orders[off::2]
-        self.sideband_names = np.array(['SB' + S for S in np.array(self.n_sidebands, dtype=str)])
         
     
     
@@ -435,11 +436,7 @@ class RABBITT_scan():
     
     
     
-<<<<<<< HEAD
-    def plot_oscillation(self, oscillation, labels=None, fig_number=None, delay_unit='fs', #TODO: Cleanup
-=======
-    def plot_oscillation(oscillation, labels=None, fig_number=None, delay_unit='fs', #TODO: Cleanup
->>>>>>> refs/remotes/origin/main
+    def plot_oscillation(self, oscillation, labels=None, fig_number=None, delay_unit='fs',
                          size_hor=10, size_ver=8, saving=False):
         '''plots multiple oscillations in seperate subplots with line coloring showing their energies,
             each having a seperate axis indicating their relative intensity
@@ -447,7 +444,6 @@ class RABBITT_scan():
 
         x_axis, x_label, x_linarity = hasi._delay_axis(delay_unit)
         plt.figure(num=fig_number, clear=True, figsize=(size_hor, size_ver))
-
 
         # plot multiple oscillations in one figure
         if len(np.shape(oscillation)) == 2:
@@ -459,14 +455,12 @@ class RABBITT_scan():
 
                     pl, = ax0.plot(x_axis, oscillation[len(oscillation)-1-i]*1e3, 'x-', 
                                    lw=0.8, ms=6, color=colors[len(oscillation)-1-i])
-                    ax0.plot([x_axis[0],x_axis[-1]], [0,0], color='grey', lw=0.5)
                     axl=ax0
                 else:
                     axi = plt.subplot(gs[i], sharex=axl)
 
                     pl, = axi.plot(x_axis, oscillation[len(oscillation)-1-i]*1e3, 'x-', 
                                    lw=0.8, ms=6, color=colors[len(oscillation)-1-i])
-                    axi.plot([x_axis[0],x_axis[-1]], [0,0], color='grey', lw=0.5)
 
                     yticks = axi.yaxis.get_major_ticks()
                     yticks[-1].label1.set_visible(False)
@@ -477,8 +471,8 @@ class RABBITT_scan():
                 if i==int(len(oscillation-1)/2): # put ylabel only on the middle plot
                     plt.ylabel('count difference (a.u.) \n')
 
-                plt.grid(axis='x')
-                plt.legend([labels[len(oscillation)-1-i]], frameon=False, loc='upper left',
+                plt.grid(axis='both')
+                plt.legend([labels[len(oscillation)-1-i]], loc='upper left',
                            bbox_to_anchor=(0.07-0.01*len(oscillation),1.03)) # change label position here !!
 
             plt.setp(ax0.get_xticklabels(), visible=False)
@@ -533,10 +527,34 @@ class RABBITT_scan():
 
     def plot_phase_diagram(self, indicator='points', show_amplitude=False, 
                            left=[], right=[], show_errors=False, saving=False):
-        '''plots the phase by energy
-            indicator ("points", "range", or "none") specifies which indication for sideband
-            positions should be shown'''
+        """
+        Plots the phase by energy.
 
+        Parameters
+        ----------
+        indicator : {'none', 'points', 'range'}, optional
+            Specifies which indication for sideband positions should be shown. 
+            The default is 'points'.
+        show_amplitude : bool, optional
+            If true an additional axis is added to the same plot to show the modulation depth by energy. 
+            The default is False.
+        left : arr of int, optional
+            Only read when indicator is 'points'.
+            Left bounds of ranges in pixels. The default is [].
+        right : arr of int, optional
+            Only read when indicator is 'points'.
+            Left bounds of ranges in pixels. The default is [].
+        show_errors : bool, optional
+            If true shows shaded regions depicting the range of error. 
+            The default is False.
+        saving : bool, optional
+            If true saves the plot as pdf-format. The default is False.
+
+        Returns
+        -------
+        None.
+
+        """
         if len(self.phase_by_energy) == 0:   # "self.phase_by_energy" was never defined
             self.do_fourier_transform(plotting=False)
 
@@ -569,7 +587,7 @@ class RABBITT_scan():
             colors_sat = self._rainbow_colors(len(left), 1.3)   # spectral colormap from red to blue
             for i in range(len(left)):
                 ax1.plot(self.energies[left[i]:right[i]], self.phase_by_energy[left[i]:right[i]],
-                         'x-', label=self.sideband_names[i], color=colors_sat[i])
+                         'x-', label=self._legend_name(self.n_sidebands[i]), color=colors_sat[i])
                 if show_amplitude  == True:
                     ax2.plot(self.energies[left[i]:right[i]], self.depth_by_energy[left[i]:right[i]],
                              'x-', color=colors[i], alpha=0.5)
@@ -753,12 +771,8 @@ class RABBITT_scan():
             self.left  = self.sidebands - extent
             self.right = self.sidebands + extent + 1
 
-        #TODO: this could eventually be used in nice plots
         cutted = np.split(self.data_diff, np.sort((self.left,self.right), axis=None), axis=1)[1::2]
         self.SB_oscillation = np.array([np.sum(cutted[i], axis=1) for i in range(len(cutted))])
-        #
-        #self.SB = np.array(self.lowest_harmonic + np.linspace(1, 2*len(self.sidebands)-1, len(self.sidebands)), dtype=int)
-        #self.SB_names = np.array(['SB' + S for S in np.array(self.SB, dtype=str)])
         
         self.plot_phase_diagram('range', True, self.left, self.right)
 
@@ -782,7 +796,9 @@ if __name__ == "__main__":
     
     hasi.do_cosine_fit(plotting=False)
     hasi.calculate_sideband_ranges()
-    hasi.plot_oscillation(hasi.SB_oscillation, hasi.sideband_names, hasi._prefix() + 'Sideband Oscillation')    
+    
+    legend_names = [hasi._legend_name(n_SB) for n_SB in hasi.n_sidebands]
+    hasi.plot_oscillation(hasi.SB_oscillation, hasi._legend_name(hasi.n_sidebands), hasi._prefix() + 'Sideband Oscillation')    
         
 
     
