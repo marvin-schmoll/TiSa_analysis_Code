@@ -72,7 +72,7 @@ class RABBITT_scan():
         self.harmonics = self.sidebands = None                                  # pixel positions of HH/SB-peaks
         self.n_harmonics = self.n_sidebands = None                              # order of HH/SB
         self.left = self.right = None                                           # left and right edges of sidebands
-        self.SB_oscillation = None                                              # signal oscillation averaged over each sideband
+        self.HH_oscillation = self.SB_oscillation = None                        # signal oscillation averaged over each HH/SB
         
         self.data_norm = self.data_diff = None                                  # speed distributions normalized and speed distribution differences from average
         
@@ -87,7 +87,7 @@ class RABBITT_scan():
         '''creates a set of "length" colors from red to blue
             "darken">1 darkens colors for usage in plotting'''
 
-        colors = cm.get_cmap('rainbow')(np.linspace(1,0,length))
+        colors = plt.get_cmap('rainbow')(np.linspace(1,0,length))
         colors_sat = colors
         colors_sat[:,:3] = colors[:,:3] / darken   # darken colors for better visibility
         return colors_sat
@@ -433,7 +433,10 @@ class RABBITT_scan():
         
         # Calculate changes from average signal
         self.data_diff = self.data_norm - normalized(np.nansum(self.data_norm, axis=0), 'sum')
-    
+        
+        self.HH_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.harmonics-2,self.harmonics+3), axis=None), axis=1)[1::2]), axis=2)
+        self.SB_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.sidebands-2,self.sidebands+3), axis=None), axis=1)[1::2]), axis=2)
+        
     
     
     def plot_oscillation(self, oscillation, labels=None, fig_number=None, delay_unit='fs',
@@ -564,7 +567,7 @@ class RABBITT_scan():
         ax1.set_xlabel('photoelectron energy [eV]')
         ax1.set_ylabel('phase [rad]')
 
-        if show_amplitude ==  True:
+        if show_amplitude:
             ax2 = ax1.twinx()
             ax2.plot(self.energies, self.depth_by_energy, 'x-', color='grey')
             ax2.tick_params(axis='both', which='major')
@@ -573,7 +576,7 @@ class RABBITT_scan():
             ax1.set_ylim([-1.8*np.pi, 1.05*np.pi])  # avoid overlap
             ax2.set_ylim([0, 2.5*highest])  # avoid overlap
             
-        if show_errors == True:
+        if show_errors:
             upper_bound = self.phase_by_energy + self.phase_by_energy_error
             lower_bound = self.phase_by_energy - self.phase_by_energy_error
             ax1.fill_between(self.energies, upper_bound, lower_bound, color='gray')
@@ -588,9 +591,12 @@ class RABBITT_scan():
             for i in range(len(left)):
                 ax1.plot(self.energies[left[i]:right[i]], self.phase_by_energy[left[i]:right[i]],
                          'x-', label=self._legend_name(self.n_sidebands[i]), color=colors_sat[i])
-                if show_amplitude  == True:
+                if show_amplitude:
                     ax2.plot(self.energies[left[i]:right[i]], self.depth_by_energy[left[i]:right[i]],
                              'x-', color=colors[i], alpha=0.5)
+                if show_errors:
+                    ax1.fill_between(self.energies[left[i]:right[i]], upper_bound[left[i]:right[i]], 
+                                     lower_bound[left[i]:right[i]], color=colors[i])
 
         plt.xlim([self.min_energy, self.max_energy])
         ax1.legend(loc='upper right')
@@ -798,7 +804,7 @@ if __name__ == "__main__":
     hasi.calculate_sideband_ranges()
     
     legend_names = [hasi._legend_name(n_SB) for n_SB in hasi.n_sidebands]
-    hasi.plot_oscillation(hasi.SB_oscillation, hasi._legend_name(hasi.n_sidebands), hasi._prefix() + 'Sideband Oscillation')    
+    hasi.plot_oscillation(hasi.SB_oscillation, legend_names, hasi._prefix() + 'Sideband Oscillation')    
         
 
     
