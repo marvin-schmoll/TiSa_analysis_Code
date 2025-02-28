@@ -332,9 +332,55 @@ class RABBITT_scan():
         
             speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
             self.speed_distributions[i] = speeds[1][:600]
- 
+    
+    
+    
+    def save_inverted_images(self):
+        '''Saves the inverted VMI images of the scan'''
+            
+        filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
+            
+        root = tk.Tk()
+        root.withdraw()
+        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
+                                 filetypes=filetypes)
+        root.destroy()    
+        print("Saving at: " + path)
+        
+        if path.split(".")[-1] == "npy": # Save as numpy binary file
+            np.save(path, self.inverted_scan)
+        
+        elif path.split(".")[-1] == "h5": # Save as h5 dataset
+            with h5py.File(path, "w") as f:
+                f.create_dataset("scan", data=self.scan)
+                f.create_dataset("interted_scan", data=self.inverted_scan)
+                f.create_dataset("speed_distributions", data=self.speed_distributions)
+
+
+
+    def read_inverted_images(self):
+        '''Reads h5 or npy files containing the inverted VMI images of the scan'''
+            
+        filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
+            
+        root = tk.Tk()
+        root.withdraw()
+        path = askopenfilename(title='Open scan file containing inverted VMI images', 
+                               defaultextension=".h5", filetypes=filetypes)
+        root.destroy()    
+        
+        if path.split(".")[-1] == "npy": # Read numpy binary file
+            self.inverted_scan = np.load(path)
+            #TODO: angular integration to get back speed
+        
+        elif path.split(".")[-1] == "h5": # Read from h5 dataset
+            with h5py.File(path, "r") as f:
+                self.scan = np.array(f['scan'])
+                self.inverted_scan = np.array(f['inverted_scan'])
+                self.speed_distributions = np.array(f['speed_distributions'])
     
         
+    
     def energy_scale(self, max_pixel=550):
         """
         Performs curve fit to determine energy axis.
@@ -352,7 +398,7 @@ class RABBITT_scan():
         None.
 
         """
-        
+        #TODO: availability to change peak distance 
         if self.speed_distributions is None:
             message = "Perform Abel inversion first to get speed distribution."
             raise AttributeError(message)
@@ -371,15 +417,15 @@ class RABBITT_scan():
         plt.ylabel('intensity (normalized)')
         plt.show()
         
-        nn = np.arange(len(peaks))
+        nn = np.arange(len(peaks))*2
         popt, pcov = curve_fit(velocity, nn, peaks, p0=[1e4,1])
-        plotrange = np.arange(-popt[1],len(peaks),0.01)
+        plotrange = np.arange(-popt[1]/2,len(peaks),0.01)
         print(popt)
         
         plt.figure(num='Speed curve-fit', clear=True)
         plt.plot(peaks, 'x')
-        plt.plot(plotrange, velocity(plotrange, *popt))
-        plt.xlabel('energy [eV]')
+        plt.plot(plotrange, velocity(plotrange*2, *popt))
+        plt.xlabel('harmonic peak number')
         plt.ylabel('speed (samples)')
         plt.show()
         
@@ -761,7 +807,7 @@ class RABBITT_scan():
             raise AttributeError(message)
         
         # find maxima in the modulation amplitude of the oscillations
-        peaks, properties = scipy.signal.find_peaks(normalized(self.depth_by_energy),  #TODO: maybe shoothing makes this more robust (?)
+        peaks, properties = scipy.signal.find_peaks(normalized(self.depth_by_energy),  #TODO: maybe smoothing makes this more robust (?)
                                                     height=0.25, width=10, rel_height=0.75)
         
         off = int(np.abs(peaks[0] - self.sidebands[0]) > np.abs(peaks[1] - self.sidebands[0]))
@@ -794,6 +840,8 @@ if __name__ == "__main__":
     hasi = RABBITT_scan('Ar')
     hasi.read_scan_files()
     hasi.perform_abel_inversion()
+    
+#%%%
     hasi.energy_scale()
     hasi.time_scale(0.01)
     
