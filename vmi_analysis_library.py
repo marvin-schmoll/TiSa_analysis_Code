@@ -68,6 +68,7 @@ class RABBITT_scan():
         self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
         self.min_energy, self.max_energy = 0, 20                                # energy limits in eV used for plotting
         self.times = None                                                       # time axis [fs]
+        self.nsteps = None                                                      # number of delay steps
         
         self.harmonics = self.sidebands = None                                  # pixel positions of HH/SB-peaks
         self.n_harmonics = self.n_sidebands = None                              # order of HH/SB
@@ -111,7 +112,7 @@ class RABBITT_scan():
             for different units on said axis'''
 
         if unit.lower() in {'n', 'step', 'steps', 'number'}:
-            return np.arange(len(self.scan)), 'delay steps', True
+            return np.arange(self.nsteps), 'delay steps', True
 
         elif unit.lower() in {'s', 'fs', 'as', 'second', 'seconds', 'time', 'times', 't', 'delay'}:
             if self.times is None: # time scale has not jet been calculated
@@ -201,6 +202,8 @@ class RABBITT_scan():
        
         if bfile: self.scan = scan.T - bimage.T * n_files
         else:     self.scan = scan.T
+        
+        self.nsteps = len(self.scan)
     
 
 
@@ -273,7 +276,9 @@ class RABBITT_scan():
         
         elif path.split(".")[-1] == "h5": # Read from h5 dataset
             with h5py.File(path, "r") as f:
-                self.scan = np.array(f['scan'])        
+                self.scan = np.array(f['scan'])      
+        
+        self.nsteps = len(self.scan)
 
 
 
@@ -290,7 +295,7 @@ class RABBITT_scan():
 
         """
         
-        intensities = np.zeros(len(self.scan))
+        intensities = np.zeros(self.nsteps)
         
         for i, image in enumerate(self.scan):        
             intensities[i] = image[920:1050,335:360].sum()
@@ -322,10 +327,10 @@ class RABBITT_scan():
             message = "No scan loaded to perform Abel inversion on."
             raise AttributeError(message)
         
-        self.inverted_scan = np.zeros((len(self.scan),1920,1199))
-        self.speed_distributions = np.zeros((len(self.scan),600))
+        self.inverted_scan = np.zeros((self.nsteps,1920,1199))
+        self.speed_distributions = np.zeros((self.nsteps,600))
         
-        for i, VMI_image in tqdm(enumerate(self.scan), total=len(self.scan)):
+        for i, VMI_image in tqdm(enumerate(self.scan), total=self.nsteps):
             recon = abel.Transform(VMI_image, direction='inverse', method='rbasex',
                                    origin=origin, verbose=False)
             self.inverted_scan[i] = recon.transform
@@ -353,14 +358,28 @@ class RABBITT_scan():
         elif path.split(".")[-1] == "h5": # Save as h5 dataset
             with h5py.File(path, "w") as f:
                 f.create_dataset("scan", data=self.scan)
-                f.create_dataset("interted_scan", data=self.inverted_scan)
+                f.create_dataset("inverted_scan", data=self.inverted_scan)
                 f.create_dataset("speed_distributions", data=self.speed_distributions)
 
 
 
-    def read_inverted_images(self):
-        '''Reads h5 or npy files containing the inverted VMI images of the scan'''
-            
+    def read_inverted_images(self, read_raw=True):
+        """
+        Reads h5 or npy files containing the inverted VMI images of the scan.
+
+        Parameters
+        ----------
+        read_raw : bool, optional
+            Choose wether to read the raw (uninverted) images as well.
+            Not doing so will speed up the process and use less RAM.
+            The option gets ignored for .npy-format which does not save the raw data.
+            Default is False.
+
+        Returns
+        -------
+        None.
+
+        """
         filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
             
         root = tk.Tk()
@@ -375,13 +394,17 @@ class RABBITT_scan():
         
         elif path.split(".")[-1] == "h5": # Read from h5 dataset
             with h5py.File(path, "r") as f:
-                self.scan = np.array(f['scan'])
+                if read_raw:
+                    self.scan = np.array(f['scan'])
                 self.inverted_scan = np.array(f['inverted_scan'])
                 self.speed_distributions = np.array(f['speed_distributions'])
+        
+        self.nsteps = len(self.inverted_scan)
     
         
     
-    def energy_scale(self, max_pixel=550):
+    def energy_scale(self, max_pixel=550, peak_distance=2,
+                     height=0.1, prominence=0.1, width=5):
         """
         Performs curve fit to determine energy axis.
         
@@ -392,13 +415,27 @@ class RABBITT_scan():
         max_pixel : int, optional
             Pixel up to which peaks can will be recognized as harmonics/sidebands. 
             The default is 550.
+            
+        peak_distance : int or float, optional
+            Distance between peaks in harmonic orders.
+            Change this if very strong sidebands get recognized by the peak finder.
+            The default is 2. This corresponds to no sidebands.
+        
+        height : float, optional
+            Minimum peak height for the the peak finder. The default is 0.1.
+        
+        prominence : float, optional
+            Minimum peak prominence for the the peak finder. The default is 0.1.
+            
+        width : float, optional
+            Minimum peak width for the the peak finder. The default is 5.
 
         Returns
         -------
         None.
 
         """
-        #TODO: availability to change peak distance 
+ 
         if self.speed_distributions is None:
             message = "Perform Abel inversion first to get speed distribution."
             raise AttributeError(message)
@@ -408,7 +445,8 @@ class RABBITT_scan():
         
         self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
         peaks, properties = scipy.signal.find_peaks(self.speed_distribution[0:max_pixel], 
-                                                    height=0.1, prominence=0.1, width=5)
+                                                    height=height, prominence=prominence,
+                                                    width=width)
         
         plt.figure(num='Speed distribution', clear=True)
         plt.plot(self.speed_distribution)
@@ -417,14 +455,14 @@ class RABBITT_scan():
         plt.ylabel('intensity (normalized)')
         plt.show()
         
-        nn = np.arange(len(peaks))*2
+        nn = np.arange(len(peaks))*peak_distance
         popt, pcov = curve_fit(velocity, nn, peaks, p0=[1e4,1])
-        plotrange = np.arange(-popt[1]/2,len(peaks),0.01)
+        plotrange = np.arange(-popt[1]/peak_distance,len(peaks),0.01)
         print(popt)
         
         plt.figure(num='Speed curve-fit', clear=True)
         plt.plot(peaks, 'x')
-        plt.plot(plotrange, velocity(plotrange*2, *popt))
+        plt.plot(plotrange, velocity(plotrange*peak_distance, *popt))
         plt.xlabel('harmonic peak number')
         plt.ylabel('speed (samples)')
         plt.show()
@@ -465,7 +503,7 @@ class RABBITT_scan():
         """
         
         delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
-        self.times = np.arange(0, len(self.scan)*delta_t, delta_t)
+        self.times = np.arange(0, self.nsteps*delta_t, delta_t)
     
     
     
@@ -843,7 +881,7 @@ if __name__ == "__main__":
     
 #%%%
     hasi.energy_scale()
-    hasi.time_scale(0.01)
+    hasi.time_scale(0.1)
     
     hasi.plot_RABBITT_trace(hasi.speed_distributions, delay_unit='fs', energy_unit='v')
     hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
