@@ -28,7 +28,7 @@ from tqdm import tqdm
 
 c = 2.99792458 * 10**8  # velocity of light [m/s]
 h = 4.135667696         # planck constant [eV*fs]
-omega_IR = 2.35         # [1/fs] (for 800nm)
+omega_IR = 2.35         # [rad/fs] (for 800nm)
 m_e = 5.68563 * 10**-12 # electron mass [eV/(m/s)^2]
 
 E_IR = h / (2*np.pi) * omega_IR   # [eV]
@@ -67,7 +67,7 @@ class RABBITT_scan():
         self.speed_distribution_norm = None                                     # normalized speed distribution (integral is 1) 
         self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
         self.min_energy, self.max_energy = 0, 20                                # energy limits in eV used for plotting
-        self.times = None                                                       # time axis [fs]
+        self.times = self.angles = None                                         # time axis [fs] and [rad] of 800nm
         self.nsteps = None                                                      # number of delay steps
         
         self.harmonics = self.sidebands = None                                  # pixel positions of HH/SB-peaks
@@ -118,6 +118,11 @@ class RABBITT_scan():
             if self.times is None: # time scale has not jet been calculated
                 self.time_scale() # calculate the time scale
             return self.times, 'delay [fs]', True
+        
+        elif unit.lower() in {'rad', 'mrad', 'phase', 'phi'}:
+            if self.angles is None: # time scale has not jet been calculated
+                self.time_scale() # calculate the time scale
+            return self.angles, 'phase delay [rad]', True
 
         else: raise ValueError('Given axis type not supported, try e.g. "step" or "time"')
         
@@ -433,6 +438,16 @@ class RABBITT_scan():
         Returns
         -------
         None.
+        
+        Notes
+        -----
+        * 'peak_distance'=2 will assume odd order harmonics
+        * 'peak_distance'=1 will assume odd order harmonics with sidebands 
+            between at the locations of even orders
+        * 'peak_distance'=2/3 will assume odd order harmonics with 
+            two equidistant sidebands between
+        other values expressable as 2/n should work along similar lines 
+        but are not explicitly supported
 
         """
  
@@ -476,25 +491,44 @@ class RABBITT_scan():
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
         
         # finding and assigning harmonics and sidebands
+        # TODO: make this work
+        expected_peak_orders = (peak_distance * np.arange(50)) + 1
+        expected_peak_energies = expected_peak_orders * E_IR
         lowest_peak_energy = self.energies[peaks][0] + self.Ip
-        lowest_peak_order = np.argmin(np.abs(lowest_peak_energy - E_IR*np.arange(20)))
-        peak_orders = lowest_peak_order + np.arange(len(peaks))
-        off = lowest_peak_order % 2
-        self.harmonics = peaks[(1-off)::2]
-        self.n_harmonics = peak_orders[(1-off)::2]
-        self.sidebands = peaks[off::2]
-        self.n_sidebands = peak_orders[off::2]
+        lowest_peak_index = np.argmin(np.abs(lowest_peak_energy - expected_peak_energies))
+        peak_orders = expected_peak_orders[lowest_peak_index:lowest_peak_index+len(peaks)]
+        harmonics = []
+        sidebands = []
+        n_harmonics = []
+        n_sidebands = []
+        for i in range(len(peaks)):
+            peak, n_peak = peaks[i], peak_orders[i]
+            if n_peak%2 == 1: #odd orders
+                harmonics.append(peak)
+                n_harmonics.append(n_peak)
+            else:
+                sidebands.append(peak)
+                n_sidebands.append(n_peak)
+        self.harmonics = np.array(harmonics)
+        self.n_harmonics = np.array(n_harmonics)
+        self.sidebands = np.array(sidebands)
+        self.n_sidebands = np.array(n_sidebands)
         
     
     
-    def time_scale(self, step):
+    def time_scale(self, step, step_unit='um'):
         """
-        Define the time axis given the steps size for the piezo in microns.
+        Define the time axis given the steps size for the piezo in microns or radians.
 
         Parameters
         ----------
         step : float
             Step size used by the piezo in µm.
+            Or phase step by the stabilization system in mrad.
+            Choose which to specify with step_unit.
+        
+        step_unit: 'um' or 'mrad'
+            Choose which one to specify. Default is 'um'.
 
         Returns
         -------
@@ -502,8 +536,18 @@ class RABBITT_scan():
 
         """
         
-        delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
+        if step_unit == 'um':
+            delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
+            delta_phi = omega_IR * delta_t       # step size in rad
+    
+        elif step_unit == 'mrad':
+            delta_phi = step * 1e-3              # step size in rad
+            delta_t = delta_phi / omega_IR       # step size in fs
+            
+        else: raise ValueError('Given step type not supported, try e.g. "um" or "mrad"')
+            
         self.times = np.arange(0, self.nsteps*delta_t, delta_t)
+        self.angles = np.arange(0, self.nsteps*delta_phi, delta_phi)
     
     
     
@@ -535,7 +579,7 @@ class RABBITT_scan():
         # plot multiple oscillations in one figure
         if len(np.shape(oscillation)) == 2:
             gs = gridspec.GridSpec(len(oscillation), 1)
-            colors = hasi._rainbow_colors(len(oscillation), 1.3) # spectral colormap from red to blue
+            colors = self._rainbow_colors(len(oscillation), 1.3) # spectral colormap from red to blue
             for i in range(len(oscillation)):
                 if i==0:
                     ax0 = plt.subplot(gs[i])
