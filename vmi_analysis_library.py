@@ -551,8 +551,22 @@ class RABBITT_scan():
     
     
     
-    def prepare_analysis(self):
-        '''normalizes data in a way that is useful for the rabbitt-analysis'''
+    def prepare_analysis(self, integral_width=2):
+        '''
+        Normalizes data in a way that is useful for the RABBITT-analysis
+        and extracts the integrals of sidband and harmonic signal.
+
+        Parameters
+        ----------
+        integral_width : int, optional
+            Specifies how many bins either side of the sideband/harmonic maximum
+            are taken nto account for the integral. The default is 2.
+
+        Returns
+        -------
+        None.
+
+        '''
         
         self.speed_distribution_norm = normalized(self.speed_distribution_jacobi, 'sum')
         
@@ -573,7 +587,7 @@ class RABBITT_scan():
             each having a seperate axis indicating their relative intensity
             if only one is given, the function also works'''
 
-        x_axis, x_label, x_linarity = hasi._delay_axis(delay_unit)
+        x_axis, x_label, x_linarity = self._delay_axis(delay_unit)
         plt.figure(num=fig_number, clear=True, figsize=(size_hor, size_ver))
 
         # plot multiple oscillations in one figure
@@ -603,8 +617,9 @@ class RABBITT_scan():
                     plt.ylabel('count difference (a.u.) \n')
 
                 plt.grid(axis='both')
-                plt.legend([labels[len(oscillation)-1-i]], loc='upper left',
-                           bbox_to_anchor=(0.07-0.01*len(oscillation),1.03)) # change label position here !!
+                if labels is not None:
+                    plt.legend([labels[len(oscillation)-1-i]], loc='upper left',
+                               bbox_to_anchor=(0.07-0.01*len(oscillation),1.03)) # change label position here !!
 
             plt.setp(ax0.get_xticklabels(), visible=False)
             plt.subplots_adjust(hspace=.0)
@@ -762,7 +777,7 @@ class RABBITT_scan():
         return self.phase_by_energy
 
 
-    def do_cosine_fit(self, plotting=True, omega=False, integrate=1):
+    def do_cosine_fit(self, plotting=True, omega=False, average=1):
         '''does a cosine fit for each energy bin and extracts the phase of the 2-omega-component
             omega=True tries to fit the 1-omega-component instead'''
         
@@ -783,70 +798,40 @@ class RABBITT_scan():
             def cos(t, phi, a, b): # fittable cosine with linear background
                 return a * np.cos(2 * omega_IR * t - phi) + b * t
 
-        if integrate == 1:
-            for single_line in self.data_diff.T:
-                
-                try:
-                    ### perform cosine fit ###
-                    popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
-                    perr = np.sqrt(np.diag(pcov))
-                    print(popt)
-        
-                    ### write down phase parameters ###
-                    if popt[1] > 0:
-                        self.phase_by_energy = np.append(self.phase_by_energy, (popt[0]+np.pi)%(2*np.pi)-np.pi)
-                    else:
-                        self.phase_by_energy = np.append(self.phase_by_energy, (popt[0])%(2*np.pi)-np.pi)
-                    self.phase_by_energy_error = np.append(self.phase_by_energy_error, perr[0])
-        
-                    self.depth_by_energy = np.append(self.depth_by_energy, np.abs(popt[1]))
-                    self.depth_by_energy_error = np.append(self.depth_by_energy_error, perr[1])
-        
-                    self.slope_by_energy = np.append(self.slope_by_energy, popt[2])
-                    self.slope_by_energy_error = np.append(self.slope_by_energy_error, perr[2])
-                
-                except ValueError:
-                    self.phase_by_energy = np.append(self.phase_by_energy, np.nan)
-                    self.phase_by_energy_error = np.append(self.phase_by_energy_error, np.nan)
-        
-                    self.depth_by_energy = np.append(self.depth_by_energy, np.nan)
-                    self.depth_by_energy_error = np.append(self.depth_by_energy_error, np.nan)
-        
-                    self.slope_by_energy = np.append(self.slope_by_energy, np.nan)
-                    self.slope_by_energy_error = np.append(self.slope_by_energy_error, np.nan)
-                
-        if integrate > 1:
-            for i in range(int(len(self.data_diff.T)/integrate)):
-                single_line = (self.data_diff.T[i*integrate:(i+1)*integrate]).sum(axis=0)
-                
-                try:
-                    ### perform cosine fit ###
-                    popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
-                    perr = np.sqrt(np.diag(pcov))
-                    print(popt)
-        
-                    ### write down phase parameters ###
-                    if popt[1] > 0:
-                        self.phase_by_energy = np.append(self.phase_by_energy, (popt[0]+np.pi)%(2*np.pi)-np.pi)
-                    else:
-                        self.phase_by_energy = np.append(self.phase_by_energy, (popt[0])%(2*np.pi)-np.pi)
-                    self.phase_by_energy_error = np.append(self.phase_by_energy_error, perr[0])
-        
-                    self.depth_by_energy = np.append(self.depth_by_energy, np.abs(popt[1]))
-                    self.depth_by_energy_error = np.append(self.depth_by_energy_error, perr[1])
-        
-                    self.slope_by_energy = np.append(self.slope_by_energy, popt[2])
-                    self.slope_by_energy_error = np.append(self.slope_by_energy_error, perr[2])
-                    
-                except ValueError:
-                    self.phase_by_energy = np.append(self.phase_by_energy, np.nan)
-                    self.phase_by_energy_error = np.append(self.phase_by_energy_error, np.nan)
-        
-                    self.depth_by_energy = np.append(self.depth_by_energy, np.nan)
-                    self.depth_by_energy_error = np.append(self.depth_by_energy_error, np.nan)
-        
-                    self.slope_by_energy = np.append(self.slope_by_energy, np.nan)
-                    self.slope_by_energy_error = np.append(self.slope_by_energy_error, np.nan)
+        for i in range(len(self.data_diff.T)):
+            if average == 1:
+                single_line = self.data_diff.T[i]
+            if average > 1:
+               single_line = (self.data_diff.T[i-average:i+average+1]).sum(axis=0)
+            
+            try:
+                ### perform cosine fit ###
+                popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
+                perr = np.sqrt(np.diag(pcov))
+                print(popt)
+    
+                ### write down phase parameters ###
+                if popt[1] > 0:
+                    self.phase_by_energy = np.append(self.phase_by_energy, (popt[0]+np.pi)%(2*np.pi)-np.pi)
+                else:
+                    self.phase_by_energy = np.append(self.phase_by_energy, (popt[0])%(2*np.pi)-np.pi)
+                self.phase_by_energy_error = np.append(self.phase_by_energy_error, perr[0])
+    
+                self.depth_by_energy = np.append(self.depth_by_energy, np.abs(popt[1]))
+                self.depth_by_energy_error = np.append(self.depth_by_energy_error, perr[1])
+    
+                self.slope_by_energy = np.append(self.slope_by_energy, popt[2])
+                self.slope_by_energy_error = np.append(self.slope_by_energy_error, perr[2])
+            
+            except ValueError:
+                self.phase_by_energy = np.append(self.phase_by_energy, np.nan)
+                self.phase_by_energy_error = np.append(self.phase_by_energy_error, np.nan)
+    
+                self.depth_by_energy = np.append(self.depth_by_energy, np.nan)
+                self.depth_by_energy_error = np.append(self.depth_by_energy_error, np.nan)
+    
+                self.slope_by_energy = np.append(self.slope_by_energy, np.nan)
+                self.slope_by_energy_error = np.append(self.slope_by_energy_error, np.nan)
                     
         self.contrast_by_energy = self.depth_by_energy / self.speed_distribution_norm
         self.contrast_by_energy_error = self.depth_by_energy_error / self.speed_distribution_norm
