@@ -51,6 +51,94 @@ def normalized(array, normalization='max'):
     raise ValueError('Specify normalization convention as "maximum" or "sum"')
 
 
+def smooth_1D(input_data, kernel_size=1, window='flat'):
+    '''
+    smoothes 2D data along the time/phase axis 
+
+    Parameters
+    ----------
+    input_data : 2D numpy array
+        The data to be smoothed.
+    kernel_size : int, optional
+        Window size of the smoothing kernel. The default is 1.
+    window : TYPE, optional
+        Function type of the cmoothing window. The default is 'flat'.
+
+    Returns
+    -------
+    2D numpy array
+        The smoothed dataset.
+        
+    Notes
+    -----
+    The working core of the code has been heavily adapted from:
+    https://scipy-cookbook.readthedocs.io/items/SignalSmooth.html
+    Check for more documentation and a minimalistic example.
+    '''
+    
+    input_data[np.isnan(input_data)] = 0 # TODO: Test and improve (interpolation?)
+    
+    # point symmetric interoplation over each endpoint (to minimize boundary effects)
+    data_unsmoothed = np.concatenate((2*input_data[0]-input_data[kernel_size:0:-1],
+                                      input_data, 2*input_data[-1]-input_data[-2:-kernel_size-2:-1]))
+
+    if window == 'flat': # Create flat kernel
+        kernel = np.ones([2*kernel_size + 1])
+
+    elif window in ['hanning', 'hamming', 'bartlett', 'blackman']:
+        kernel = np.array([getattr(np, window)(2*kernel_size + 1)]).T
+
+    elif window == 'gauss':
+        kernel = np.array([np.exp(-(np.arange(-kernel_size,kernel_size+1)**2 / kernel_size))]).T
+
+    kernel = kernel / np.sum(kernel)
+    return scipy.signal.convolve(data_unsmoothed, kernel, mode='valid')
+
+
+def smooth_2D(input_data, k_x=1, k_y=3):
+    '''
+    smoothes 2D data along the both dimensions using a gaussian window
+
+    Parameters
+    ----------
+    input_data : TYPE
+        DESCRIPTION.
+    k_x : int, optional
+        Kernel size along x direction. The default is 1.
+    k_y : int, optional
+        Kernel size along y direction. The default is 3.
+
+    Returns
+    -------
+    2D numpy array
+        The smoothed dataset.
+    
+    Notes
+    -----
+    The working core of the code has been heavily adapted from:
+    https://scipy-cookbook.readthedocs.io/items/SignalSmooth.html
+    Check for more documentation and a minimalistic example.
+    '''
+    
+    input_data[np.isnan(input_data)] = 0 # TODO: Test and improve (interpolation?)
+    
+    # point symmetric interoplation over each endpoint (to minimize boundary effects)
+    data_between = np.concatenate((2*input_data[0]-input_data[k_x:0:-1], input_data, 2*input_data[-1]-input_data[-2:-k_x-2:-1])).T
+    data_unsmoothed = np.concatenate((2*data_between[0]-data_between[k_y:0:-1], data_between, 2*data_between[-1]-data_between[-2:-k_y-2:-1])).T
+
+    def gauss_kernel(size, sizey=None):
+        """ Returns a normalized 2D gauss kernel array for convolutions """
+        size = int(size)
+        if not sizey:
+            sizey = size
+        else:
+            sizey = int(sizey)
+        x, y = np.mgrid[0-size:size+1, 0-sizey:sizey+1]
+        g = np.exp(-(x**2/size + y**2/sizey))
+        return g / np.sum(g)
+
+    return scipy.signal.convolve(data_unsmoothed, gauss_kernel(k_x, k_y), mode='valid')
+
 
 
 class RABBITT_scan():
@@ -491,7 +579,6 @@ class RABBITT_scan():
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
         
         # finding and assigning harmonics and sidebands
-        # TODO: make this work
         expected_peak_orders = (peak_distance * np.arange(50)) + 1
         expected_peak_energies = expected_peak_orders * E_IR
         lowest_peak_energy = self.energies[peaks][0] + self.Ip
@@ -551,7 +638,7 @@ class RABBITT_scan():
     
     
     
-    def prepare_analysis(self, integral_width=2):
+    def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None):
         '''
         Normalizes data in a way that is useful for the RABBITT-analysis
         and extracts the integrals of sidband and harmonic signal.
@@ -560,7 +647,18 @@ class RABBITT_scan():
         ----------
         integral_width : int, optional
             Specifies how many bins either side of the sideband/harmonic maximum
-            are taken nto account for the integral. The default is 2.
+            are taken into account for the integral. The default is 2.
+        
+        smoothE : int, optional
+            Can be specified to smooth the data along the energy axis.
+            The integer will specify the size of the smoothing kernel.
+            The default is None, which deactivates smoothing completely.
+        
+        smoothT : int, optional
+            If smoothing is done along the energy axis,
+            this can be specified to smooth the data along the time axis.
+            The integer will specify the size of the smoothing kernel.
+            The default is None, which deactivates smoothing along this axis.
 
         Returns
         -------
@@ -573,11 +671,21 @@ class RABBITT_scan():
         # Normalize signal for each delay step
         self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
         
-        # Calculate changes from average signal
-        self.data_diff = self.data_norm - normalized(np.nansum(self.data_norm, axis=0), 'sum')
+        # Smooth data if specified
+        if (smoothE is None) or (smoothE == 0):
+            self.data_smooth = self.data_norm
+        elif (smoothT is None) or (smoothT == 0):
+            self.data_smooth = smooth_1D(self.data_norm.T, smoothE, 'hanning').T
+        else:
+            self.data_smooth = smooth_2D(self.data_norm, smoothT, smoothE)
         
-        self.HH_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.harmonics-2,self.harmonics+3), axis=None), axis=1)[1::2]), axis=2)
-        self.SB_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.sidebands-2,self.sidebands+3), axis=None), axis=1)[1::2]), axis=2)
+        # Calculate changes from average signal
+        self.data_diff = self.data_smooth - normalized(np.nansum(self.data_smooth, axis=0), 'sum')
+        
+        self.HH_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.harmonics-integral_width,self.harmonics+integral_width+1), 
+                                                                               axis=None), axis=1)[1::2]), axis=2)
+        self.SB_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.sidebands-integral_width,self.sidebands+integral_width+1), 
+                                                                               axis=None), axis=1)[1::2]), axis=2)
         
     
     
