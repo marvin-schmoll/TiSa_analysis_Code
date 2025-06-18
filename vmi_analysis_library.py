@@ -140,6 +140,90 @@ def smooth_2D(input_data, k_x=1, k_y=3):
     return scipy.signal.convolve(data_unsmoothed, gauss_kernel(k_x, k_y), mode='valid')
 
 
+def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None, 
+                         theta_low=-np.pi, theta_high=np.pi):
+    """
+    Calculate the one-dimensional radial intensity profile by angular
+    integration or averaging of the image, treated either as a two-dimensional
+    distribution or as a central slice of a cylindrically symmetric
+    three-dimensional distribution.
+
+    Parameters
+    ----------
+    kind : str
+        operation to perform:
+
+        ``'int2D'``:
+            integration in 2D over polar angles
+        ``'int3D'``:
+            integration in 3D over solid angles
+        ``'avg2D'``:
+            averaging in 2D over polar angles
+        ``'avg3D'``:
+            averaging in 3D over solid angles
+
+    IM : 2D numpy.array
+        the image data
+
+    origin : tuple of float or None
+        image origin in the (row, column) format. If ``None``, the geometric
+        center of the image (``rows // 2, cols // 2``) is used.
+
+    dr : float
+        radial grid spacing in pixels (default 1). ``dr=0.5`` may reduce pixel
+        granularity of the radial profile.
+
+    dt : float or None
+        angular grid spacing in radians.
+        If ``None``, the number of theta values will be set to largest
+        dimension (the height or the width) of the image, which should
+        typically ensure good sampling.
+    
+    theta_low : float
+        angle to start integration (radians).
+        The angle range is parametrized from -pi to +pi.
+        Default is -pi, which corresponds to no lower limit.
+        
+    theta_high : float
+        angle to end integration (radians).
+        The angle range is parametrized from -pi to +pi.
+        Default is +pi, which corresponds to no upper limit.
+
+    Returns
+    -------
+    r : 1D numpy.array
+        radial coordinates
+
+    intensity : 1D numpy.array
+        intensity profile as a function of the radial coordinate
+        
+    Notes
+    -----
+    This is a clone of the abel.tools.vmi.radial_intensity function from thy 
+    PyAbel library with added capability to only integrate a slice of the image
+    """
+    polarIM, R, T = abel.tools.polar.reproject_image_into_polar(IM, origin, dr=dr, dt=dt)
+    print(theta_low, theta_high)
+    # apply necessary Jacobian/normalization
+    if kind == 'int2D':
+        polarIM *= R
+    elif kind == 'int3D':
+        polarIM *= np.pi * R**2 * np.abs(np.sin(T))
+    elif kind == 'avg2D':
+        polarIM /= 2 * np.pi
+    elif kind == 'avg3D':
+        polarIM *= np.abs(np.sin(T)) / 4
+    else:
+        raise ValueError('Incorrect kind={}'.format(kind))
+
+    # integrate over theta
+    dt = T[0, 1] - T[0, 0]  # get the actual number, if dt=None was passed
+    mask = np.logical_and(theta_low < T, T < theta_high)
+    intensity = polarIM.sum(axis=1, where=mask) * dt
+
+    return R[:, 0], intensity
+
+
 
 class RABBITT_scan():
     
@@ -399,7 +483,8 @@ class RABBITT_scan():
 
 
 
-    def perform_abel_inversion(self, origin=(998,610)):
+    def perform_abel_inversion(self, origin=(967, 607), 
+                               theta_low=-np.pi, theta_high=+np.pi):
         """
         Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
         
@@ -408,7 +493,7 @@ class RABBITT_scan():
         Parameters
         ----------
         origin : 2-tuple of int, optional
-            Image center in pixels. The default is (998,610).
+            Image center in pixels. The default is (967, 607).
 
         Returns
         -------
@@ -428,7 +513,9 @@ class RABBITT_scan():
                                    origin=origin, verbose=False)
             self.inverted_scan[i] = recon.transform
         
-            speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
+            #speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
+            speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], 
+                                          theta_low=theta_low, theta_high=theta_high)
             self.speed_distributions[i] = speeds[1][:600]
     
     
@@ -1008,7 +1095,7 @@ class RABBITT_scan():
 
 
         
-#%%
+#%% Example usage
 
 if __name__ == "__main__":
 
