@@ -36,6 +36,8 @@ E_IR = h / (2*np.pi) * omega_IR   # [eV]
 ionization_energies = {'He': 24.587, 'Ne': 21.565, 'Ar': 15.760, 'Kr': 14.000, 'Xe': 12.13,
                        'CH4': 13.6, 'CH3': 14.8, 'CH2': 15.8, 'CH': 22.9} # in eV
 
+default_origin = (967, 608)  # Change (!) here if VMI camera was moved
+
 
 
 def normalized(array, normalization='max'):
@@ -372,6 +374,48 @@ class RABBITT_scan():
                 self.scan = np.array(f['scan'])      
         
         self.nsteps = len(self.scan)
+    
+    
+    
+    def clone_image_half(self, side, origin=default_origin):
+        """
+        Function to delete half of the image
+
+        Parameters
+        ----------
+        side : str
+            Chose which half of the immage to be kept. 
+            Options are 
+        origin : 2-tuple of int, optional
+            Image center in pixels. The default is can be set globally.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        dims = self.scan.shape
+        
+        if side == 'top': # upper side on camera, right in numpy plotting
+            self.scan[:,:,:origin[1]] = 0
+            i = min(origin[1], dims[2]-origin[1])
+            self.scan[:,:,origin[1]-i:origin[1]] = np.flip(self.scan[:,:,origin[1]:origin[1]+i], axis=2)
+            
+        elif side == 'bottom': # lower side on camera, left in numpy plotting
+            self.scan[:,:,origin[1]:] = 0
+            i = min(origin[1], dims[2]-origin[1])
+            self.scan[:,:,origin[1]:origin[1]+i] = np.flip(self.scan[:,:,origin[1]-i:origin[1]], axis=2)
+            
+        elif side == 'right': # right side on camera, lower in numpy plotting
+            self.scan[:,origin[0]:,:] = 0
+            i = min(origin[0], dims[1]-origin[0])
+            self.scan[:,origin[0]:origin[0]+i,:] = np.flip(self.scan[:,origin[0]-i:origin[0],:], axis=1)
+        
+        elif side == 'left': # left side on camera, upper in numpy plotting
+            self.scan[:,:origin[0],:] = 0
+            i = min(origin[0], dims[1]-origin[0])
+            self.scan[:,origin[0]-i:origin[0],:] = np.flip(self.scan[:,origin[0]:origin[0]+i,:], axis=1)
 
 
 
@@ -399,7 +443,7 @@ class RABBITT_scan():
 
 
 
-    def perform_abel_inversion(self, origin=(998,610)):
+    def perform_abel_inversion(self, origin=default_origin):
         """
         Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
         
@@ -408,7 +452,7 @@ class RABBITT_scan():
         Parameters
         ----------
         origin : 2-tuple of int, optional
-            Image center in pixels. The default is (998,610).
+            Image center in pixels. The default is can be set globally.
 
         Returns
         -------
