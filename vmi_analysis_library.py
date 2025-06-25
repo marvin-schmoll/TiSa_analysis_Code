@@ -379,15 +379,16 @@ class RABBITT_scan():
     
     def clone_image_half(self, side, origin=default_origin):
         """
-        Function to delete half of the image
+        Function to delete half of the image 
+        and replace it by a mirrored copy of the other image half.
 
         Parameters
         ----------
         side : str
-            Chose which half of the immage to be kept. 
-            Options are 
+            Chose which half of the image ("top", "bottom", "left", "right")
+            to be kept. The opposite half will be deleted.
         origin : 2-tuple of int, optional
-            Image center in pixels. The default is can be set globally.
+            Image center in pixels. The default can be set globally.
 
         Returns
         -------
@@ -416,6 +417,9 @@ class RABBITT_scan():
             self.scan[:,:origin[0],:] = 0
             i = min(origin[0], dims[1]-origin[0])
             self.scan[:,origin[0]-i:origin[0],:] = np.flip(self.scan[:,origin[0]:origin[0]+i,:], axis=1)
+        
+        else:
+            raise ValueError("Side must be one of 'left', 'right', 'top', 'bottom'")
 
 
 
@@ -452,7 +456,7 @@ class RABBITT_scan():
         Parameters
         ----------
         origin : 2-tuple of int, optional
-            Image center in pixels. The default is can be set globally.
+            Image center in pixels. The default can be set globally.
 
         Returns
         -------
@@ -527,7 +531,10 @@ class RABBITT_scan():
         
         if path.split(".")[-1] == "npy": # Read numpy binary file
             self.inverted_scan = np.load(path)
-            #TODO: angular integration to get back speed
+            self.speed_distributions = np.zeros((self.nsteps,600))
+            for i in range(self.nsteps):
+                speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
+                self.speed_distributions[i] = speeds[1][:600]
         
         elif path.split(".")[-1] == "h5": # Read from h5 dataset
             with h5py.File(path, "r") as f:
@@ -1062,7 +1069,7 @@ if __name__ == "__main__":
     
 #%%%
     hasi.energy_scale()
-    hasi.time_scale(0.1)
+    hasi.time_scale(100, 'mrad')
     
     hasi.plot_RABBITT_trace(hasi.speed_distributions, delay_unit='fs', energy_unit='v')
     hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
