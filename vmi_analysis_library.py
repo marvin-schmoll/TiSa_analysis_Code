@@ -15,6 +15,7 @@ from matplotlib import pyplot as plt
 from matplotlib import gridspec
 import matplotlib.image
 import matplotlib.cm as cm
+from matplotlib.colors import LogNorm
 import cmasher as cmr # makes better colormaps available, comment out if not installed
 import scipy.signal
 from scipy.optimize import curve_fit
@@ -302,14 +303,19 @@ class RABBITT_scan():
     
 
 
-    def plot_VMI_image(self, image, cmap='viridis', saving=False, upper_clim=None):
+    def plot_VMI_image(self, image, cmap='viridis', saving=False, 
+                       lower_clim=None, upper_clim=None, logscale=False):
         '''plots a single VMI image'''
         
-        plt.matshow(image, cmap=cmap)
+        if logscale:
+            image = np.where(image < 0.1, np.ones_like(image)*0.1, image)
+            plt.matshow(image, norm=LogNorm(), cmap=cmap)
+        else:
+            plt.matshow(image, cmap=cmap)
         plt.xlabel('pixels')
         plt.ylabel('pixels')
         plt.colorbar()
-        plt.clim(0, upper_clim)
+        plt.clim(lower_clim, upper_clim)
         
         if saving is True or saving == "pdf":
             plt.savefig('vmi_image.pdf')
@@ -733,9 +739,12 @@ class RABBITT_scan():
         # Calculate changes from average signal
         self.data_diff = self.data_smooth - normalized(np.nansum(self.data_smooth, axis=0), 'sum')
         
+        self.left  = self.sidebands - integral_width
+        self.right = self.sidebands + integral_width+1
+        
         self.HH_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.harmonics-integral_width,self.harmonics+integral_width+1), 
                                                                                axis=None), axis=1)[1::2]), axis=2)
-        self.SB_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.sidebands-integral_width,self.sidebands+integral_width+1), 
+        self.SB_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.left,self.right), 
                                                                                axis=None), axis=1)[1::2]), axis=2)
         
     
@@ -831,7 +840,7 @@ class RABBITT_scan():
 
 
     def plot_phase_diagram(self, indicator='points', show_amplitude=False, 
-                           left=[], right=[], show_errors=False, saving=False):
+                           left=None, right=None, show_errors=False, saving=False):
         """
         Plots the phase by energy.
 
@@ -844,11 +853,13 @@ class RABBITT_scan():
             If true an additional axis is added to the same plot to show the modulation depth by energy. 
             The default is False.
         left : arr of int, optional
-            Only read when indicator is 'points'.
-            Left bounds of ranges in pixels. The default is [].
+            Only read when indicator is 'range'.
+            Left bounds of ranges in pixels. The default is None,
+            which defaults to the left bounds saved in local variable self.left.
         right : arr of int, optional
-            Only read when indicator is 'points'.
-            Left bounds of ranges in pixels. The default is [].
+            Only read when indicator is 'range'.
+            Left bounds of ranges in pixels. The default is None,
+            which defaults to the left bounds saved in local variable self.right.
         show_errors : bool, optional
             If true shows shaded regions depicting the range of error. 
             The default is False.
@@ -888,6 +899,8 @@ class RABBITT_scan():
             ax1.plot(self.energies[self.sidebands], self.phase_by_energy[self.sidebands], 'o', color='green', label='SB')
         
         if indicator == 'range':   # color points ascribed to each sideband in different colors
+            if left is None: left = self.left
+            if right is None: right = self.right
             colors = self._rainbow_colors(len(left), 1.0)   # spectral colormap from red to blue
             colors_sat = self._rainbow_colors(len(left), 1.3)   # spectral colormap from red to blue
             for i in range(len(left)):
@@ -908,7 +921,21 @@ class RABBITT_scan():
 
 
     def do_fourier_transform(self, plotting=True):
-        '''does a fourier transform for each energy bin and extracts the phase of the 2-omega-component'''
+        """
+        Does a fourier transform for each energy bin 
+        and extracts the phase of the 2-omega-component.
+
+        Parameters
+        ----------
+        plotting : bool, optional
+            Whether to directly plot the result. The default is True.
+
+        Returns
+        -------
+        np.array
+            Array containing the oscillation phases at each energy.
+
+        """
         
         if self.data_diff is None:
             self.prepare_analysis()  # Calculate difference dataset expected by curve fit
@@ -921,13 +948,13 @@ class RABBITT_scan():
         # Perform all the Fourier transforms
         fouriers = [np.fft.fft(single_line) for single_line in self.data_diff.T]
         fourier_map = np.abs(fouriers)
-        fourier_phases = np.angle (fouriers)
+        fourier_phases = np.angle(fouriers)
         fourier_spectrum = np.nansum(fourier_map, axis=0)
         
         # Find oscillation frequency and extract phase there
         peak = np.argmax(fourier_spectrum[3:]) + 3
         self.phase_by_energy = -fourier_phases.T[peak]
-        self.depth_by_energy = fourier_map[peak]
+        self.depth_by_energy = fourier_map.T[peak]
 
         # show corresponding plot
         if plotting == True:

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Ti:Sa HHG Analysis Software
-(based on existing Code for K04) 
+(based on my older Code for K04) 
 
 @author: Marvin Schmoll
 marvin.schmoll@physik.uni-freiburg.de
@@ -19,14 +19,14 @@ import tkinter as tk
 from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
 
 
-#TODO: Check if all constants still vaqlid for Ti:Sa
+#TODO: Check if all constants still valid for Ti:Sa
 planck = 4.135667516 * 10**(-15) # plancks constant [eV*s]
 lightspeed = 299792458           # speed of light [m/s]
 g = 1/1200 * 10**(-3)            # grating constant [m]
 dist_g_MCP = 469 * 10**(-3)      # distance between grating and MCP [m]
 distance_from_focus = 1.37       #*** distance between grating and VMI focus [m]
 alpha = 85.3 / 180 * np.pi       # grating incidence angle [rad]
-spatial_scale = 43.3 * 10**(-6)  # camera spatial scale [m/pixel]
+spatial_scale = 42.7 * 10**(-6)  # camera spatial scale [m/pixel]
 lambda_IR = 786 * 10**(-9)       # wavelength [m]
 #X_0 = 2911                      #*** offset between spectrometer zero and actual zero-order [pixels]
 
