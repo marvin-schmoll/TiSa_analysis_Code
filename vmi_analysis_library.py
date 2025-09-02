@@ -19,6 +19,8 @@ from matplotlib.colors import LogNorm
 import cmasher as cmr # makes better colormaps available, comment out if not installed
 import scipy.signal
 from scipy.optimize import curve_fit
+import warnings
+from enum import Enum
 
 import abel
 
@@ -149,6 +151,9 @@ class RABBITT_scan():
     def __init__(self, gas, name=None):
         '''currently empty as functionality is tranferred to the class'''
         
+        self.types = Enum('scan_type', [('NONE', None), ('DELAY', 1), ('CEP', 2)])
+        self.scan_type = self.types.NONE                                        # type of scan performed
+        
         self.gas, self.Ip = gas, ionization_energies[gas]                       # gas used in the VMI, its ionization potential
         self.name = name
         
@@ -158,7 +163,7 @@ class RABBITT_scan():
         self.speed_distribution_norm = None                                     # normalized speed distribution (integral is 1) 
         self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
         self.min_energy, self.max_energy = 0, 20                                # energy limits in eV used for plotting
-        self.times = self.angles = None                                         # time axis [fs] and [rad] of 800nm
+        self.times = self.angles = self.distances = None                        # x axis [fs], [rad] and [mm] of 800nm
         self.nsteps = None                                                      # number of delay steps
         
         self.harmonics = self.sidebands = None                                  # pixel positions of HH/SB-peaks
@@ -195,25 +200,33 @@ class RABBITT_scan():
     
     def _legend_name(self, order, pre='SB'):
         '''returns names as 'SB14' for plot legends'''
-        return pre + str(order)
+        return pre + str(np.round(order, 1))
 
 
-    def _delay_axis(self, unit='n'):
+    def _phase_axis(self, unit='n'):
         '''private subfunction used in all plotting functions using a delay axis to allow
-            for different units on said axis'''
+            for different units on said axis''' #TODO: this can be written more neatly
 
         if unit.lower() in {'n', 'step', 'steps', 'number'}:
             return np.arange(self.nsteps), 'delay steps', True
 
         elif unit.lower() in {'s', 'fs', 'as', 'second', 'seconds', 'time', 'times', 't', 'delay'}:
             if self.times is None: # time scale has not jet been calculated
-                self.time_scale() # calculate the time scale
+                warnings.warn('Time scale not yet calculated, using steps for the axis instead.')
+                return self._phase_axis(unit='n')
             return self.times, 'delay [fs]', True
         
         elif unit.lower() in {'rad', 'mrad', 'phase', 'phi'}:
             if self.angles is None: # time scale has not jet been calculated
-                self.time_scale() # calculate the time scale
+                warnings.warn('Angle scale not yet calculated, using steps for the axis instead.')
+                return self._phase_axis(unit='n')
             return self.angles, 'phase delay [rad]', True
+        
+        elif unit.lower() in {'m', 'mm', 'um', 'x', 'dist', 'distance'}:
+            if self.distances is None: # time scale has not jet been calculated
+                warnings.warn('Distance scale not yet calculated, using steps for the axis instead.')
+                return self._phase_axis(unit='n')
+            return self.distances, 'distance [mm]', True
 
         else: raise ValueError('Given axis type not supported, try e.g. "step" or "time"')
         
@@ -663,16 +676,33 @@ class RABBITT_scan():
     def time_scale(self, step, step_unit='um'):
         """
         Define the time axis given the steps size for the piezo in microns or radians.
+        Legacy alias - replaced by phase_scale.
+
+        """
+        
+        return self.phase_scale(step, step_unit)
+
+
+    def phase_scale(self, step, step_unit='um'):
+        """
+        Define the axis for the scan parameter of the delay stage or CEP wedge.
 
         Parameters
         ----------
         step : float
-            Step size used by the piezo in µm.
-            Or phase step by the stabilization system in mrad.
+            Step size used by the piezo in µm,
+            phase step by the stabilization system in mrad,
+            or CEP wedge step distance in mm.
             Choose which to specify with step_unit.
         
-        step_unit: 'um' or 'mrad'
+        step_unit: 'um', 'mrad', 'mm'
             Choose which one to specify. Default is 'um'.
+        
+        Notes
+        -----
+        If 'um' or 'mrad' is specified, the class will assume a delay scan,
+        if 'mm' is specified, the class will treat this scan as a CEP scan.
+        
 
         Returns
         -------
@@ -681,17 +711,30 @@ class RABBITT_scan():
         """
         
         if step_unit == 'um':
+            self.scan_type = self.types.DELAY
             delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
             delta_phi = omega_IR * delta_t       # step size in rad
     
         elif step_unit == 'mrad':
+            self.scan_type = self.types.DELAY
             delta_phi = step * 1e-3              # step size in rad
             delta_t = delta_phi / omega_IR       # step size in fs
+        
+        elif step_unit == 'mm':
+            self.scan_type = self.types.CEP
+            delta_x = step                       # step_size in mm
+            # TODO: more units & calibration
             
         else: raise ValueError('Given step type not supported, try e.g. "um" or "mrad"')
-            
-        self.times = np.arange(0, self.nsteps*delta_t, delta_t)
-        self.angles = np.arange(0, self.nsteps*delta_phi, delta_phi)
+        
+        if self.scan_type is self.types.DELAY:
+            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
+            self.times = np.arange(0, self.nsteps*delta_t, delta_t)
+            self.angles = np.arange(0, self.nsteps*delta_phi, delta_phi)
+        
+        if self.scan_type is self.types.CEP:
+            print('CEP scan with ' + str(self.nsteps) + ' CEP steps')
+            self.distances = np.arange(0, self.nsteps*delta_x, delta_x)
     
     
     
@@ -755,7 +798,7 @@ class RABBITT_scan():
             each having a seperate axis indicating their relative intensity
             if only one is given, the function also works'''
 
-        x_axis, x_label, x_linarity = self._delay_axis(delay_unit)
+        x_axis, x_label, x_linarity = self._phase_axis(delay_unit)
         plt.figure(num=fig_number, clear=True, figsize=(size_hor, size_ver))
 
         # plot multiple oscillations in one figure
@@ -809,7 +852,7 @@ class RABBITT_scan():
         '''plots the RABBITT-trace as colormap;
             no interpolation between datapoints is used to show the real resolution'''
 
-        x_axis, x_label, _ = self._delay_axis(delay_unit)
+        x_axis, x_label, _ = self._phase_axis(delay_unit)
         y_axis, y_label, _ = self._energy_axis(energy_unit)
         _, ax = plt.subplots(num=fig_number, clear=True, figsize=figsize)
 
@@ -953,12 +996,13 @@ class RABBITT_scan():
         
         # Find oscillation frequency and extract phase there
         peak = np.argmax(fourier_spectrum[3:]) + 3
+        print('Used fourier bin ' + str(peak))
         self.phase_by_energy = -fourier_phases.T[peak]
         self.depth_by_energy = fourier_map.T[peak]
 
         # show corresponding plot
         if plotting == True:
-            self.plot_phase_diagram(indicator='points',  show_amplitude=True)
+            self.plot_phase_diagram(indicator='points', show_amplitude=True)
 
         return self.phase_by_energy
 
@@ -992,7 +1036,7 @@ class RABBITT_scan():
             
             try:
                 ### perform cosine fit ###
-                popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
+                popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line) #TODO: this is broken for CEP scan
                 perr = np.sqrt(np.diag(pcov))
                 print(popt)
     
