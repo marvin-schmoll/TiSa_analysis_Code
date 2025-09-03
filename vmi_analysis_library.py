@@ -32,7 +32,10 @@ from tqdm import tqdm
 c = 2.99792458 * 10**8  # velocity of light [m/s]
 h = 4.135667696         # planck constant [eV*fs]
 omega_IR = 2.35         # [rad/fs] (for 800nm)
+lambda_IR = 800e-9      # [m]
 m_e = 5.68563 * 10**-12 # electron mass [eV/(m/s)^2]
+
+CEP_factor = 9.6406e-4  # calibration factor wedge distance to CEP distance
 
 E_IR = h / (2*np.pi) * omega_IR   # [eV]
 
@@ -151,7 +154,7 @@ class RABBITT_scan():
     def __init__(self, gas, name=None):
         '''currently empty as functionality is tranferred to the class'''
         
-        self.types = Enum('scan_type', [('NONE', None), ('DELAY', 1), ('CEP', 2)])
+        self.types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
         self.scan_type = self.types.NONE                                        # type of scan performed
         
         self.gas, self.Ip = gas, ionization_energies[gas]                       # gas used in the VMI, its ionization potential
@@ -204,32 +207,37 @@ class RABBITT_scan():
 
 
     def _phase_axis(self, unit='n'):
-        '''private subfunction used in all plotting functions using a delay axis to allow
-            for different units on said axis''' #TODO: this can be written more neatly
+        '''Private subfunction used in all plotting functions using a delay axis
+        to allow for different units on said axis.'''
+    
+        # dispatch table:
+        # unit sets → (attribute_name, (delay label, CEP label), flag, warning message)
+        axis_map = {
+            ('n', 'step', 'steps', 'number'): 
+                (None, 'steps', True, None),
+            ('s', 'fs', 'as', 'second', 'seconds', 'time', 'times', 't', 'delay'):
+                ('times', ('delay [fs]', 'CEP delay [fs]'), True, 'Time scale not yet calculated'),
+            ('rad', 'mrad', 'phase', 'phi'):
+                ('angles', ('phase delay [rad]', 'CEP [rad]'), True, 'Angle scale not yet calculated'),
+            ('m', 'mm', 'um', 'x', 'dist', 'distance'):
+                ('distances', ('stage distance [mm]', 'wedge distance [mm]'), True, 'Distance scale not yet calculated'),
+        }
+    
+        for keys, (attr_name, labels, flag, warn_msg) in axis_map.items():
+            if unit.lower() in keys:
+                if attr_name is None:  # step axis
+                    return np.arange(self.nsteps), labels, flag
+    
+                axis = getattr(self, attr_name)
+                if axis is None:
+                    warnings.warn(f'{warn_msg}, using steps for the axis instead.')
+                    return self._phase_axis('n')
+                return axis, labels[self.scan_type.value], flag
+    
+        raise ValueError(
+            f'Given axis type "{unit}" not supported, try e.g. "step" or "time"'
+        )
 
-        if unit.lower() in {'n', 'step', 'steps', 'number'}:
-            return np.arange(self.nsteps), 'delay steps', True
-
-        elif unit.lower() in {'s', 'fs', 'as', 'second', 'seconds', 'time', 'times', 't', 'delay'}:
-            if self.times is None: # time scale has not jet been calculated
-                warnings.warn('Time scale not yet calculated, using steps for the axis instead.')
-                return self._phase_axis(unit='n')
-            return self.times, 'delay [fs]', True
-        
-        elif unit.lower() in {'rad', 'mrad', 'phase', 'phi'}:
-            if self.angles is None: # time scale has not jet been calculated
-                warnings.warn('Angle scale not yet calculated, using steps for the axis instead.')
-                return self._phase_axis(unit='n')
-            return self.angles, 'phase delay [rad]', True
-        
-        elif unit.lower() in {'m', 'mm', 'um', 'x', 'dist', 'distance'}:
-            if self.distances is None: # time scale has not jet been calculated
-                warnings.warn('Distance scale not yet calculated, using steps for the axis instead.')
-                return self._phase_axis(unit='n')
-            return self.distances, 'distance [mm]', True
-
-        else: raise ValueError('Given axis type not supported, try e.g. "step" or "time"')
-        
         
     def _energy_axis(self, unit='n'):
         '''private subfunction to allow
@@ -712,29 +720,30 @@ class RABBITT_scan():
         
         if step_unit == 'um':
             self.scan_type = self.types.DELAY
+            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
+            delta_x = step                       # step size in µm
             delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
             delta_phi = omega_IR * delta_t       # step size in rad
     
         elif step_unit == 'mrad':
             self.scan_type = self.types.DELAY
+            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
             delta_phi = step * 1e-3              # step size in rad
             delta_t = delta_phi / omega_IR       # step size in fs
+            delta_x = delta_t/1e15 * c * 1e6/2   # step size in µm
         
         elif step_unit == 'mm':
             self.scan_type = self.types.CEP
-            delta_x = step                       # step_size in mm
-            # TODO: more units & calibration
+            print('CEP scan with ' + str(self.nsteps) + ' CEP steps')
+            delta_x = step                                           # step size in mm
+            delta_phi = step*CEP_factor / (lambda_IR*1e3) * 2*np.pi  # step size in rad
+            delta_t = delta_phi / omega_IR
             
         else: raise ValueError('Given step type not supported, try e.g. "um" or "mrad"')
         
-        if self.scan_type is self.types.DELAY:
-            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
-            self.times = np.arange(0, self.nsteps*delta_t, delta_t)
-            self.angles = np.arange(0, self.nsteps*delta_phi, delta_phi)
-        
-        if self.scan_type is self.types.CEP:
-            print('CEP scan with ' + str(self.nsteps) + ' CEP steps')
-            self.distances = np.arange(0, self.nsteps*delta_x, delta_x)
+        self.distances = np.arange(0, self.nsteps*delta_x, delta_x)
+        self.times = np.arange(0, self.nsteps*delta_t, delta_t)
+        self.angles = np.arange(0, self.nsteps*delta_phi, delta_phi)
     
     
     
