@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Ti:Sa VMI Analysis Software
-(based on existing Code for K04) 
+(based on my older Code for K04) 
 
 @author: Marvin Schmoll
 marvin.schmoll@physik.uni-freiburg.de
@@ -42,7 +42,7 @@ E_IR = h / (2*np.pi) * omega_IR   # [eV]
 ionization_energies = {'He': 24.587, 'Ne': 21.565, 'Ar': 15.760, 'Kr': 14.000, 'Xe': 12.13,
                        'CH4': 13.6, 'CH3': 14.8, 'CH2': 15.8, 'CH': 22.9} # in eV
 
-default_origin = (967, 608)  # Change (!) here if VMI camera was moved
+default_origin = (967, 607)  # Change (!) here if VMI camera was moved
 
 
 
@@ -1061,7 +1061,7 @@ class RABBITT_scan():
     def do_fourier_transform(self, plotting=True):
         """
         Does a fourier transform for each energy bin 
-        and extracts the phase of the 2-omega-component.
+        and extracts the phase of the oscillating component.
 
         Parameters
         ----------
@@ -1102,9 +1102,29 @@ class RABBITT_scan():
         return self.phase_by_energy
 
 
-    def do_cosine_fit(self, plotting=True, omega=False, average=1):
-        '''does a cosine fit for each energy bin and extracts the phase of the 2-omega-component
-            omega=True tries to fit the 1-omega-component instead'''
+    def do_cosine_fit(self, plotting=True, omega=2, average=0):
+        """
+        Does a cosine fit for each energy bin 
+        and extracts the phase of the oscillating component
+
+        Parameters
+        ----------
+        plotting : bool, optional
+            Whether to directly plot the result. The default is True.
+        omega : int or float, optional
+            The frequency of the angular component to be fitted in units of omega_IR.
+            The default is 2, which captures RABBITT with harmonics spaced 2*E_IR.
+            Use 1 for harmonics spaced 1*E_IR or the Ti:Sa CEP scan.
+        average : int, optional
+            Specify >0 to average neighboring pixels when fitting for less noisy fits.
+            The default is 0, meaning no averaging.
+
+        Returns
+        -------
+        np.array
+            Array containing the oscillation phases at each energy.
+
+        """
         
         if self.data_diff is None:
             self.prepare_analysis()  # Calculate difference dataset expected by curve fit
@@ -1116,22 +1136,18 @@ class RABBITT_scan():
         self.depth_by_energy_error = np.array([])
         self.slope_by_energy_error = np.array([])
         
-        if omega is True:
-            def cos(t, phi, a, b): # fittable cosine with linear background
-                return a * np.cos(omega_IR * t - phi) + b * t
-        else:
-            def cos(t, phi, a, b): # fittable cosine with linear background
-                return a * np.cos(2 * omega_IR * t - phi) + b * t
+        def cos(t, phi, a, b): # fittable cosine with linear background
+            return a * np.cos(omega*omega_IR * t - phi) + b * t
 
         for i in range(len(self.data_diff.T)):
-            if average == 1:
+            if average == 0:
                 single_line = self.data_diff.T[i]
-            if average > 1:
+            if average > 0:
                single_line = (self.data_diff.T[i-average:i+average+1]).sum(axis=0)
             
             try:
                 ### perform cosine fit ###
-                popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line) #TODO: this is broken for CEP scan
+                popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
                 perr = np.sqrt(np.diag(pcov))
                 print(popt)
     
