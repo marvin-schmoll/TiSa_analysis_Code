@@ -203,7 +203,6 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
     PyAbel library with added capability to only integrate a slice of the image
     """
     polarIM, R, T = abel.tools.polar.reproject_image_into_polar(IM, origin, dr=dr, dt=dt)
-    print(theta_low, theta_high)
     # apply necessary Jacobian/normalization
     if kind == 'int2D':
         polarIM *= R
@@ -489,32 +488,32 @@ class RABBITT_scan():
         Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
         
         Uses the PyAbel-implementation of the rbasex-method.
-
+    
         Parameters
         ----------
         origin : 2-tuple of int, optional
             Image center in pixels. The default is (967, 607).
-
+    
         Returns
         -------
         None.
-
+    
         """
         
         if self.scan is None:
             message = "No scan loaded to perform Abel inversion on."
             raise AttributeError(message)
         
-        self.inverted_scan = np.zeros((self.nsteps,1920,1199))
+        self.inverted_scan = np.zeros((self.nsteps,1920,1200))
         self.speed_distributions = np.zeros((self.nsteps,600))
         
         for i, VMI_image in tqdm(enumerate(self.scan), total=self.nsteps):
-            recon = abel.Transform(VMI_image, direction='inverse', method='rbasex',
-                                   origin=origin, verbose=False)
-            self.inverted_scan[i] = recon.transform
+            recon = abel.rbasex.rbasex_transform(self.scan[i].T, origin=origin, 
+                                                     order=6, odd=True)
+            self.inverted_scan[i] = recon[0].T
         
             #speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
-            speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], 
+            speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], origin=origin[::-1],
                                           theta_low=theta_low, theta_high=theta_high)
             self.speed_distributions[i] = speeds[1][:600]
     
