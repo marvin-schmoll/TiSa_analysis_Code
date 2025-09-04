@@ -36,6 +36,8 @@ E_IR = h / (2*np.pi) * omega_IR   # [eV]
 ionization_energies = {'He': 24.587, 'Ne': 21.565, 'Ar': 15.760, 'Kr': 14.000, 'Xe': 12.13,
                        'CH4': 13.6, 'CH3': 14.8, 'CH2': 15.8, 'CH': 22.9} # in eV
 
+default_origin = (967, 608)  # Change (!) here if VMI camera was moved
+
 
 
 def normalized(array, normalization='max'):
@@ -482,7 +484,7 @@ class RABBITT_scan():
 
 
 
-    def perform_abel_inversion(self, origin=(967, 607), 
+    def perform_abel_inversion(self, origin=default_origin, 
                                theta_low=-np.pi, theta_high=+np.pi):
         """
         Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
@@ -492,7 +494,7 @@ class RABBITT_scan():
         Parameters
         ----------
         origin : 2-tuple of int, optional
-            Image center in pixels. The default is (967, 607).
+            Image center in pixels. The default can be set globally.
     
         Returns
         -------
@@ -508,12 +510,12 @@ class RABBITT_scan():
         self.speed_distributions = np.zeros((self.nsteps,600))
         
         for i, VMI_image in tqdm(enumerate(self.scan), total=self.nsteps):
-            recon = abel.rbasex.rbasex_transform(self.scan[i].T, origin=origin, 
+            recon = abel.rbasex.rbasex_transform(self.scan[i].T, origin=origin[::-1], 
                                                      order=6, odd=True)
             self.inverted_scan[i] = recon[0].T
         
             #speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
-            speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], origin=origin[::-1],
+            speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], origin=origin,
                                           theta_low=theta_low, theta_high=theta_high)
             self.speed_distributions[i] = speeds[1][:600]
     
