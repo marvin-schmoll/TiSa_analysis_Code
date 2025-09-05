@@ -28,6 +28,9 @@ import tkinter as tk
 from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
 from tqdm import tqdm
 
+import utility_library as util
+from utility_library import normalized
+
 
 c = 2.99792458 * 10**8  # velocity of light [m/s]
 h = 4.135667696         # planck constant [eV*fs]
@@ -43,109 +46,6 @@ ionization_energies = {'He': 24.587, 'Ne': 21.565, 'Ar': 15.760, 'Kr': 14.000, '
                        'CH4': 13.6, 'CH3': 14.8, 'CH2': 15.8, 'CH': 22.9} # in eV
 
 default_origin = (967, 607)  # Change (!) here if VMI camera was moved
-
-
-
-def normalized(array, normalization='max'):
-    '''Shorthand for normalizing arrays.
-        "Normalization" decides, if the maximum or the sum of all values is set to one.'''
-
-    if normalization in ['max', 'maximum', 'Maximum']:
-        return array / np.nanmax(np.abs(array))
-
-    if normalization in ['sum', 'Sum', 'int', 'integral', 'Integral']:
-        return array / np.nansum(array)
-
-    raise ValueError('Specify normalization convention as "maximum" or "sum"')
-
-
-def smooth_1D(input_data, kernel_size=1, window='flat'):
-    '''
-    smoothes 2D data along the time/phase axis 
-
-    Parameters
-    ----------
-    input_data : 2D numpy array
-        The data to be smoothed.
-    kernel_size : int, optional
-        Window size of the smoothing kernel. The default is 1.
-    window : TYPE, optional
-        Function type of the cmoothing window. The default is 'flat'.
-
-    Returns
-    -------
-    2D numpy array
-        The smoothed dataset.
-        
-    Notes
-    -----
-    The working core of the code has been heavily adapted from:
-    https://scipy-cookbook.readthedocs.io/items/SignalSmooth.html
-    Check for more documentation and a minimalistic example.
-    '''
-    
-    input_data[np.isnan(input_data)] = 0 # TODO: Test and improve (interpolation?)
-    
-    # point symmetric interoplation over each endpoint (to minimize boundary effects)
-    data_unsmoothed = np.concatenate((2*input_data[0]-input_data[kernel_size:0:-1],
-                                      input_data, 2*input_data[-1]-input_data[-2:-kernel_size-2:-1]))
-
-    if window == 'flat': # Create flat kernel
-        kernel = np.ones([2*kernel_size + 1])
-
-    elif window in ['hanning', 'hamming', 'bartlett', 'blackman']:
-        kernel = np.array([getattr(np, window)(2*kernel_size + 1)]).T
-
-    elif window == 'gauss':
-        kernel = np.array([np.exp(-(np.arange(-kernel_size,kernel_size+1)**2 / kernel_size))]).T
-
-    kernel = kernel / np.sum(kernel)
-    return scipy.signal.convolve(data_unsmoothed, kernel, mode='valid')
-
-
-def smooth_2D(input_data, k_x=1, k_y=3):
-    '''
-    smoothes 2D data along the both dimensions using a gaussian window
-
-    Parameters
-    ----------
-    input_data : TYPE
-        DESCRIPTION.
-    k_x : int, optional
-        Kernel size along x direction. The default is 1.
-    k_y : int, optional
-        Kernel size along y direction. The default is 3.
-
-    Returns
-    -------
-    2D numpy array
-        The smoothed dataset.
-    
-    Notes
-    -----
-    The working core of the code has been heavily adapted from:
-    https://scipy-cookbook.readthedocs.io/items/SignalSmooth.html
-    Check for more documentation and a minimalistic example.
-    '''
-    
-    input_data[np.isnan(input_data)] = 0 # TODO: Test and improve (interpolation?)
-    
-    # point symmetric interoplation over each endpoint (to minimize boundary effects)
-    data_between = np.concatenate((2*input_data[0]-input_data[k_x:0:-1], input_data, 2*input_data[-1]-input_data[-2:-k_x-2:-1])).T
-    data_unsmoothed = np.concatenate((2*data_between[0]-data_between[k_y:0:-1], data_between, 2*data_between[-1]-data_between[-2:-k_y-2:-1])).T
-
-    def gauss_kernel(size, sizey=None):
-        """ Returns a normalized 2D gauss kernel array for convolutions """
-        size = int(size)
-        if not sizey:
-            sizey = size
-        else:
-            sizey = int(sizey)
-        x, y = np.mgrid[0-size:size+1, 0-sizey:sizey+1]
-        g = np.exp(-(x**2/size + y**2/sizey))
-        return g / np.sum(g)
-
-    return scipy.signal.convolve(data_unsmoothed, gauss_kernel(k_x, k_y), mode='valid')
 
 
 def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None, 
@@ -266,16 +166,6 @@ class RABBITT_scan():
  
     
       
-    def _rainbow_colors(self, length, darken=1):
-        '''creates a set of "length" colors from red to blue
-            "darken">1 darkens colors for usage in plotting'''
-
-        colors = plt.get_cmap('rainbow')(np.linspace(1,0,length))
-        colors_sat = colors
-        colors_sat[:,:3] = colors[:,:3] / darken   # darken colors for better visibility
-        return colors_sat
-    
-        
     def _prefix(self):
         '''changes the name like "name: " to create separate plots for each intance of the class'''
         if self.name is None or self.name == '':
@@ -870,9 +760,9 @@ class RABBITT_scan():
         if (smoothE is None) or (smoothE == 0):
             self.data_smooth = self.data_norm
         elif (smoothT is None) or (smoothT == 0):
-            self.data_smooth = smooth_1D(self.data_norm.T, smoothE, 'hanning').T
+            self.data_smooth = util.smooth_1D(self.data_norm.T, smoothE, 'hanning').T
         else:
-            self.data_smooth = smooth_2D(self.data_norm, smoothT, smoothE)
+            self.data_smooth = util.smooth_2D(self.data_norm, smoothT, smoothE)
         
         # Calculate changes from average signal
         self.data_diff = self.data_smooth - normalized(np.nansum(self.data_smooth, axis=0), 'sum')
@@ -899,7 +789,7 @@ class RABBITT_scan():
         # plot multiple oscillations in one figure
         if len(np.shape(oscillation)) == 2:
             gs = gridspec.GridSpec(len(oscillation), 1)
-            colors = self._rainbow_colors(len(oscillation), 1.3) # spectral colormap from red to blue
+            colors = util.rainbow_colors(len(oscillation), 1.3) # spectral colormap from red to blue
             for i in range(len(oscillation)):
                 if i==0:
                     ax0 = plt.subplot(gs[i])
@@ -1039,8 +929,8 @@ class RABBITT_scan():
         if indicator == 'range':   # color points ascribed to each sideband in different colors
             if left is None: left = self.left
             if right is None: right = self.right
-            colors = self._rainbow_colors(len(left), 1.0)   # spectral colormap from red to blue
-            colors_sat = self._rainbow_colors(len(left), 1.3)   # spectral colormap from red to blue
+            colors = util.rainbow_colors(len(left), 1.0)   # spectral colormap from red to blue
+            colors_sat = util.rainbow_colors(len(left), 1.3)   # spectral colormap from red to blue
             for i in range(len(left)):
                 ax1.plot(self.energies[left[i]:right[i]], self.phase_by_energy[left[i]:right[i]],
                          'x-', label=self._legend_name(self.n_sidebands[i]), color=colors_sat[i])
@@ -1207,8 +1097,6 @@ class RABBITT_scan():
             Right bounds of the sidebands.
 
         """
-        '''calculates the FWHM-ranges of the sideband oscillations in terms of their modulation amplitude
-            if extent (integer) is specified, the corresponding number of bins towards each side is used instead'''
 
         if len(self.phase_by_energy) == 0:   # "self.phase_by_energy" was never defined
             message = "Perform cosine fit or fourier transform to obtain the oscillation amplitude."

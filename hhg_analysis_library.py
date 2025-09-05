@@ -18,6 +18,8 @@ from os import listdir
 import tkinter as tk
 from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
 
+import utility_library as util
+
 
 #TODO: Check if all constants still valid for Ti:Sa
 planck = 4.135667516 * 10**(-15) # plancks constant [eV*s]
@@ -29,16 +31,6 @@ alpha = 85.3 / 180 * np.pi       # grating incidence angle [rad]
 spatial_scale = 42.7 * 10**(-6)  # camera spatial scale [m/pixel]
 lambda_IR = 786 * 10**(-9)       # wavelength [m]
 #X_0 = 2911                      #*** offset between spectrometer zero and actual zero-order [pixels]
-
-
-
-def my_tuple(array):
-    '''emulates the python tuple() typecasting from arrays,
-        but the tuple with len=1 is replaced by the element itself'''
-    my_tuple = tuple(array)
-    if len(my_tuple)>1:     return my_tuple
-    elif len(my_tuple)==1:  return my_tuple[0]
-    else:                   return None
 
 
 
@@ -226,8 +218,7 @@ def FWHM_divergence(full_data, x_left, x_right, plotting=3, title=''):
 
     intX = np.sum(selected_data, axis = 1)   # integrate over x
     intX=intX/np.max(intX)                   # normalize
-    max_set = np.max(intX)                   # maximum of integrated data (=1)
-    max_x = np.where(intX==max_set)[0][0]    # position of the maximum
+    max_x = np.where(intX==1)[0][0]          # position of the maximum
 
     if plotting >=1:
         plt.plot(intX, label = ('maximum at y = ' + str(max_x)))
@@ -239,19 +230,7 @@ def FWHM_divergence(full_data, x_left, x_right, plotting=3, title=''):
         plt.legend()
         plt.show()
 
-    # find FWHM
-    xx1 = np.where((intX[max_x:len(intX)]<=max_set/2))
-    xx2 = np.where((intX[:max_x]<=max_set/2))
-    if len(xx1[0])==0 or len(xx2[0])==0:
-        print('FWHM could not be calculated; curve does not drop below half maximum')
-        return None
-    x1 = np.min(xx1) + max_x
-    x2 = np.max(xx2)
-    max_x1 = (x1-1)*(max_set/2-intX[x1])/(intX[x1-1]-intX[x1]) + (x1)*(intX[x1-1]-max_set/2)/(intX[x1-1]-intX[x1])
-    max_x2 = (x2+1)*(max_set/2-intX[x2])/(intX[x2+1]-intX[x2]) + (x2)*(intX[x2+1]-max_set/2)/(intX[x2+1]-intX[x2])
-    #print(max_x1, max_x2)
-    fwhm = abs(max_x2-max_x1)
-
+    fwhm, _ = util.find_FWHM(intX)
     return fwhm
 
 
@@ -260,12 +239,12 @@ def sideband_remover(*position_information):
         if this is not the case this removes sidebands in between
         the first element of tuple sideband_information should be its pixel position'''
 
-    if len(position_information[0]) < 3:   return my_tuple(position_information)  # gaps cannot be compared
+    if len(position_information[0]) < 3:   return util.my_tuple(position_information)  # gaps cannot be compared
 
     differences = position_information[0][1:] - position_information[0][:-1]
     diff_diff = differences[1:] - differences[:-1] #   should be > 0
     test = np.where(diff_diff < 0)
-    if len(test[0])==0: return my_tuple(position_information)   # done
+    if len(test[0])==0: return util.my_tuple(position_information)   # done
     else:   # recursion
         fault = np.min(test) + 2
         return sideband_remover(*tuple([np.delete(info, fault) for info in position_information]))
