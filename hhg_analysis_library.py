@@ -310,14 +310,15 @@ def HH_energy_scale(peaks):
 
 
 
-#%%
+#%% Example usage
 
 if __name__ == "__main__":
 
-    folder = 'D:/2024-09-10/' 
-    file = '1240_05harmonics_power_1p4W_9832.h5'
-    background_file = '1244_34harmonics_power_1p4W_9832_laserblocked.h5'
+    folder = 'C:/Users/Marvin/Documents/HHGdata/' 
+    file = 'Al_meshless_filter_Neon_750mW_9839p0.h5'
+    background_file = 'Al_meshless_filter_Neon_750mW_9839p0_Bgd.h5'
     
     data = read_MCP_data(folder+file, folder+background_file, plotting=True)
     HH, left, right = peak_finder(data, distance=40, window_size=2, width=10, height=0.03)
     harm_number = HH_energy_scale(HH)
+    FWHM_divergence(data, left[2], right[2])

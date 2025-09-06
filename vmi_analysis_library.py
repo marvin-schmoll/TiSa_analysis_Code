@@ -447,8 +447,8 @@ class RABBITT_scan():
 
 
 
-    def perform_abel_inversion(self, origin=default_origin, 
-                               theta_low=-np.pi, theta_high=+np.pi):
+    def perform_abel_inversion(self, origin=default_origin,
+                               theta=(-np.pi,+np.pi), order=6, odd_orders=True):
         """
         Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
         
@@ -458,6 +458,19 @@ class RABBITT_scan():
         ----------
         origin : 2-tuple of int, optional
             Image center in pixels. The default can be set globally.
+            
+        theta : 2-tuple of float
+            Angle range for the integration (radians).
+            Angles are parametrized from -pi to +pi.
+            Default is (-np.pi, +np.pi), which corresponds to the full range.
+            
+        order : int
+            Highest angular order for rbasex evaluation, ≥ 0 (by default, 6). 
+            Working with very high orders (≳ 15) can result in excessive noise,
+            especially at small radii and for narrow peaks.
+        
+        odd_orders : bool
+            Include odd angular orders (by default is True)
 
         Returns
         -------
@@ -474,12 +487,12 @@ class RABBITT_scan():
         
         for i, VMI_image in tqdm(enumerate(self.scan), total=self.nsteps):
             recon = abel.rbasex.rbasex_transform(self.scan[i].T, origin=origin[::-1], 
-                                                     order=6, odd=True)
+                                                     order=order, odd=odd_orders)
             self.inverted_scan[i] = recon[0].T
         
             #speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
             speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], origin=origin,
-                                          theta_low=theta_low, theta_high=theta_high)
+                                          theta_low=theta[0], theta_high=theta[1])
             self.speed_distributions[i] = speeds[1][:600]
     
     
@@ -550,7 +563,7 @@ class RABBITT_scan():
     
         
     
-    def energy_scale(self, max_pixel=550, peak_distance=2,
+    def energy_scale(self, max_pixel=550, peak_distance=2/3,
                      height=0.1, prominence=0.1, width=5):
         """
         Performs curve fit to determine energy axis.
@@ -1135,7 +1148,7 @@ if __name__ == "__main__":
 
     hasi = RABBITT_scan('Ar')
     hasi.read_scan_files()
-    hasi.perform_abel_inversion()
+    hasi.perform_abel_inversion(theta=(0, np.pi))
     
 #%%%
     hasi.energy_scale()
