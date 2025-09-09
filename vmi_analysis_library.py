@@ -259,7 +259,8 @@ class RABBITT_scan():
         bfile : str, optional
             Specify the file containing a background scan. 
             Only relevant when 'files' is not None.
-            The default is '', which disables background subtraction.
+            The default is '', which uses the internal background image saved 
+            in the h5 file if available for subtraction.
 
         Returns
         -------
@@ -284,14 +285,16 @@ class RABBITT_scan():
         print('Reading shape...')       # get correct shape of single scan
         f = h5py.File(files[0], 'r')
         scan = np.zeros_like(np.array(f['Images']))
+        if not bfile: bimage = np.zeros_like(np.array(f['Background Image']))
         n_files = len(files)
     
         for file in tqdm(files, desc='Reading scans'):
             f = h5py.File(file, 'r')
             scan += np.array(f['Images'])
+            bimage += np.array(f['Background Image'])
        
         if bfile: self.scan = scan.T - bimage.T * n_files
-        else:     self.scan = scan.T
+        else:     self.scan = scan.T - bimage.T
         
         self.nsteps = len(self.scan)
     
@@ -423,30 +426,6 @@ class RABBITT_scan():
 
 
 
-    def check_oscillation_preliminary(self):
-        """
-        Checks the oscillation of a (as of now hardcoded) region in the image.
-        
-        Legacy function for quick checks of newly acquired data without Abel inversion.
-        
-
-        Returns
-        -------
-        None.
-
-        """
-        
-        intensities = np.zeros(self.nsteps)
-        
-        for i, image in enumerate(self.scan):        
-            intensities[i] = image[920:1050,335:360].sum()
-        
-        plt.figure()
-        plt.plot(intensities)
-        plt.show()
-
-
-
     def perform_abel_inversion(self, origin=default_origin,
                                theta=(-np.pi,+np.pi), order=6, odd_orders=True):
         """
@@ -495,6 +474,36 @@ class RABBITT_scan():
                                           theta_low=theta[0], theta_high=theta[1])
             self.speed_distributions[i] = speeds[1][:600]
     
+    
+    
+    def _calculate_asymmetry_parameter(self, origin=default_origin):
+        """
+        Calculates signal difference between top and bottom half of the image.
+        TODO: this method is still in development
+
+        Parameters
+        ----------
+        origin : 2-tuple of int, optional
+            Image center in pixels. The default can be set globally.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        for i, inverted_image in tqdm(enumerate(self.inverted_scan), total=self.nsteps):
+            top_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
+                                            theta_low=0, theta_high=np.pi)[1]
+            low_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
+                                            theta_low=-np.pi, theta_high=0)[1]
+            parameter = (top_half - low_half)
+            self.speed_distributions[i] = parameter[:600]
+            
+            self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
+            self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
+            self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
+            
     
     
     def save_inverted_images(self):
