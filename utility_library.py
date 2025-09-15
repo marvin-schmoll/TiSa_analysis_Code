@@ -58,8 +58,8 @@ def find_FWHM(dataset):
     -----
     If the dataset has a more complicated multi-peaked structure
     the peak will be the highest singular value in the dataset,
-    and the FWHM will be from the first point where the intensity is more than
-    half this value to the last.
+    and the FWHM will be from the last point before thge max where the intensity 
+    is less than half its value to the first one after the max.
 
     """
     
@@ -69,15 +69,19 @@ def find_FWHM(dataset):
     # find FWHM
     xx1 = np.where((data[max_x:len(data)]<=1/2))
     xx2 = np.where((data[:max_x]<=1/2))
-    if len(xx1[0])==0 or len(xx2[0])==0:
-        warnings.warn('FWHM could not be calculated; curve does not drop below half maximum')
-        return None
+    if len(xx1[0])==0:
+        warnings.warn('FWHM could not be calculated properly; curve does not drop below half maximum')
+        xx1 = len(data) - max_x - 1
+    if len(xx2[0])==0:
+        warnings.warn('FWHM could not be calculated properly; curve does not drop below half maximum')
+        xx2 = 0
     x1 = np.min(xx1) + max_x
     x2 = np.max(xx2)
     max_x1 = (x1-1)*(1/2-data[x1])/(data[x1-1]-data[x1]) + (x1)*(data[x1-1]-1/2)/(data[x1-1]-data[x1])
     max_x2 = (x2+1)*(1/2-data[x2])/(data[x2+1]-data[x2]) + (x2)*(data[x2+1]-1/2)/(data[x2+1]-data[x2])
     #print(max_x1, max_x2)
     return abs(max_x2-max_x1) ,(x2, max_x, x1)
+
 
 #%% Smoothing and Averaging
 
@@ -196,3 +200,64 @@ def rainbow_colors(length, darken=1):
     colors_sat = colors
     colors_sat[:,:3] = colors[:,:3] / darken   # darken colors for better visibility
     return colors_sat
+
+
+def select_ranges(plot_func, x_axis=None, *args, **kwargs):
+    '''
+    Select ranges from a plot
+
+    Parameters
+    ----------
+    plot_func : python function producing a plot
+        The function is required to have an argument show_external which will
+        be used to show the figure within this function.
+    x_axis : np.array
+        If None as per default, the selected values in axis units will be returned.
+        If specified, the bins along the specified axis will be returned.
+    *args, **kwargs : to be passed on to plot_func
+
+    Returns
+    -------
+    2 tuple of np.array
+        The left and right bounds of the selected regions 
+        (one array for left one for right).
+        Depending on whether x_axis is specified or not this will be in axis
+        units or in bins.
+
+    '''
+    fig, axs = plot_func(*args, **kwargs, show_external=True)
+
+    selected_ranges = []
+    clicks = []
+    
+    def onclick(event):
+        if len(axs) == 1:
+            if event.inaxes != axs:
+                return
+        else:
+            if event.inaxes not in axs:
+                return
+        
+        clicks.append(event.xdata)
+        if len(clicks) == 2:
+            x1, x2 = sorted(clicks)
+            selected_ranges.append((x1, x2))
+            axs[0].axvspan(x1, x2, color='orange', alpha=0.3)
+            plt.draw()
+            print(f"Selected x-range: ({x1:.2f}, {x2:.2f})")
+            clicks.clear()
+    
+    fig.canvas.mpl_connect('button_press_event', onclick)
+    plt.show(block=True)
+
+    X = np.array(selected_ranges)
+    X.sort(axis=0)
+    
+    if x_axis is None: # return in axis units
+        return X.T[0], X.T[1]
+        
+    else: # Convert to data bins
+        left = np.array([np.argmin(np.abs(x_axis - X.T[0,i])) for i in range(len(X))])
+        right = np.array([np.argmin(np.abs(x_axis - X.T[1,i])) for i in range(len(X))])
+        return left, right
+

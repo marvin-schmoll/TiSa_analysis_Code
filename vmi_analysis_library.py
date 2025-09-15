@@ -48,6 +48,28 @@ ionization_energies = {'He': 24.587, 'Ne': 21.565, 'Ar': 15.760, 'Kr': 14.000, '
 default_origin = (967, 607)  # Change (!) here if VMI camera was moved
 
 
+def plot_VMI_image(image, cmap='viridis', saving=False, 
+                   lower_clim=None, upper_clim=None, logscale=False):
+    '''plots a single VMI image'''
+    
+    if logscale:
+        image = np.where(image < 0.1, np.ones_like(image)*0.1, image)
+        plt.matshow(image, norm=LogNorm(), cmap=cmap)
+    else:
+        plt.matshow(image, cmap=cmap)
+    plt.xlabel('pixels')
+    plt.ylabel('pixels')
+    plt.colorbar()
+    plt.clim(lower_clim, upper_clim)
+    
+    if saving is True or saving == "pdf":
+        plt.savefig('vmi_image.pdf')
+    elif  saving == "png":
+        plt.savefig('vmi_image.png', dpi=300)
+    
+    plt.show()
+
+
 def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None, 
                          theta_low=-np.pi, theta_high=np.pi):
     """
@@ -297,29 +319,6 @@ class RABBITT_scan():
         else:     self.scan = scan.T - bimage.T
         
         self.nsteps = len(self.scan)
-    
-
-
-    def plot_VMI_image(self, image, cmap='viridis', saving=False, 
-                       lower_clim=None, upper_clim=None, logscale=False):
-        '''plots a single VMI image'''
-        
-        if logscale:
-            image = np.where(image < 0.1, np.ones_like(image)*0.1, image)
-            plt.matshow(image, norm=LogNorm(), cmap=cmap)
-        else:
-            plt.matshow(image, cmap=cmap)
-        plt.xlabel('pixels')
-        plt.ylabel('pixels')
-        plt.colorbar()
-        plt.clim(lower_clim, upper_clim)
-        
-        if saving is True or saving == "pdf":
-            plt.savefig('vmi_image.pdf')
-        elif  saving == "png":
-            plt.savefig('vmi_image.png', dpi=300)
-        
-        plt.show()
 
 
 
@@ -890,7 +889,8 @@ class RABBITT_scan():
 
 
     def plot_phase_diagram(self, indicator='points', show_amplitude=False, 
-                           left=None, right=None, show_errors=False, saving=False):
+                           left=None, right=None, show_errors=False, saving=False,
+                           show_external=False):
         """
         Plots the phase by energy.
 
@@ -915,10 +915,16 @@ class RABBITT_scan():
             The default is False.
         saving : bool, optional
             If true saves the plot as pdf-format. The default is False.
+        show_external : bool, optional
+            Do not show the figure inside this function (can be showed externally).
+            The default is False.
 
         Returns
         -------
-        None.
+        matplitlib.Figure
+            The figure object of the plot.
+        2-tuple of matplotlib.axes.Axes
+            The axis objects of the plot
 
         """
         if len(self.phase_by_energy) == 0:   # "self.phase_by_energy" was never defined
@@ -967,7 +973,10 @@ class RABBITT_scan():
         ax1.legend(loc='upper right')
         fig.tight_layout()
         if saving: plt.savefig('favorite_plot.png', dpi=400)
-        fig.show()
+        if not show_external: plt.show()
+        
+        return fig, (ax1, ax2) 
+        
 
 
     def do_fourier_transform(self, plotting=True):
@@ -1097,56 +1106,60 @@ class RABBITT_scan():
 
         
         
-    def calculate_sideband_ranges(self, extent=None):
+    def select_sideband_ranges(self, manual_selection=False, dist=None):
         """
         Calculates the positions and ranges of the sideband oscillations in terms of their modulation amplitude.
-
+    
         Parameters
         ----------
-        extent : int, optional
-            If specified, the corresponding number of bins towards each side is used instead of the fitted ranges.
-
+        manual_selection: bool, optional
+            Choose whether to open an interactive plot to manually select. 
+            The default is False.
+        dist : int, optional
+            How many pixels off the pre-given walues to look for max.
+            Default is None, which looks inside the previous integration ranges.
+    
         Raises
         ------
         AttributeError
             If the modulation has not yet been characterized.
-
+    
         Returns
         -------
         np.array
             Left bounds of the sidebands.
         np.array
             Right bounds of the sidebands.
-
+    
         """
-
+    
         if len(self.phase_by_energy) == 0:   # "self.phase_by_energy" was never defined
             message = "Perform cosine fit or fourier transform to obtain the oscillation amplitude."
             raise AttributeError(message)
         
-        # find maxima in the modulation amplitude of the oscillations
-        peaks, properties = scipy.signal.find_peaks(normalized(self.depth_by_energy),  #TODO: maybe smoothing makes this more robust (?)
-                                                    height=0.25, width=10, rel_height=0.75)
+        if manual_selection:
+            self.left, self.right = util.select_ranges(self.plot_phase_diagram, self.energies,
+                                                       show_amplitude=True, indicator='range')
+        else:    
+            if dist is None:   # look for maximum inside the pre-made selection
+                left = self.left
+                right = self.right
+            else:   # look for maximum extent bins to the left and right
+                left = self.sidebands - dist
+                right = self.sidebands + dist
         
-        off = int(np.abs(peaks[0] - self.sidebands[0]) > np.abs(peaks[1] - self.sidebands[0]))
-        self.sidebands = peaks[off::2]
-
-        if extent is None: # use FWHM ranges for the sidebands
-            left_ips = np.array(np.ceil(properties['left_ips']), dtype=int)
-            right_ips = np.array(np.ceil(properties['right_ips']), dtype=int)
-            self.left = left_ips[off::2]
-            self.right = right_ips[off::2]
-
-        else:  # use specified ranges
-            self.left  = self.sidebands - extent
-            self.right = self.sidebands + extent + 1
-
+            for i, sb in enumerate(self.sidebands):
+                fwhm_data = util.find_FWHM(self.depth_by_energy[left[i]:right[i]])
+                self.left[i] = fwhm_data[1][0] + left[i]
+                self.right[i] = fwhm_data[1][2] + left[i]
+            
+    
         cutted = np.split(self.data_diff, np.sort((self.left,self.right), axis=None), axis=1)[1::2]
         self.SB_oscillation = np.array([np.sum(cutted[i], axis=1) for i in range(len(cutted))])
         
         self.plot_phase_diagram('range', True, self.left, self.right)
-
-        return self.left, self.right        
+    
+        return self.left, self.right
 
 
 
