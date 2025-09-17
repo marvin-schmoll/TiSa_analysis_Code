@@ -475,36 +475,6 @@ class RABBITT_scan():
     
     
     
-    def _calculate_asymmetry_parameter(self, origin=default_origin):
-        """
-        Calculates signal difference between top and bottom half of the image.
-        TODO: this method is still in development
-
-        Parameters
-        ----------
-        origin : 2-tuple of int, optional
-            Image center in pixels. The default can be set globally.
-
-        Returns
-        -------
-        None.
-
-        """
-        
-        for i, inverted_image in tqdm(enumerate(self.inverted_scan), total=self.nsteps):
-            top_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
-                                            theta_low=0, theta_high=np.pi)[1]
-            low_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
-                                            theta_low=-np.pi, theta_high=0)[1]
-            parameter = (top_half - low_half)
-            self.speed_distributions[i] = parameter[:600]
-            
-            self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
-            self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
-            self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
-            
-    
-    
     def save_inverted_images(self):
         '''Saves the inverted VMI images of the scan'''
             
@@ -744,60 +714,6 @@ class RABBITT_scan():
     
     
     
-    def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None):
-        '''
-        Normalizes data in a way that is useful for the RABBITT-analysis
-        and extracts the integrals of sidband and harmonic signal.
-
-        Parameters
-        ----------
-        integral_width : int, optional
-            Specifies how many bins either side of the sideband/harmonic maximum
-            are taken into account for the integral. The default is 2.
-        
-        smoothE : int, optional
-            Can be specified to smooth the data along the energy axis.
-            The integer will specify the size of the smoothing kernel.
-            The default is None, which deactivates smoothing completely.
-        
-        smoothT : int, optional
-            If smoothing is done along the energy axis,
-            this can be specified to smooth the data along the time axis.
-            The integer will specify the size of the smoothing kernel.
-            The default is None, which deactivates smoothing along this axis.
-
-        Returns
-        -------
-        None.
-
-        '''
-        
-        self.speed_distribution_norm = normalized(self.speed_distribution_jacobi, 'sum')
-        
-        # Normalize signal for each delay step
-        self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
-        
-        # Smooth data if specified
-        if (smoothE is None) or (smoothE == 0):
-            self.data_smooth = self.data_norm
-        elif (smoothT is None) or (smoothT == 0):
-            self.data_smooth = util.smooth_1D(self.data_norm.T, smoothE, 'hanning').T
-        else:
-            self.data_smooth = util.smooth_2D(self.data_norm, smoothT, smoothE)
-        
-        # Calculate changes from average signal
-        self.data_diff = self.data_smooth - normalized(np.nansum(self.data_smooth, axis=0), 'sum')
-        
-        self.left  = self.sidebands - integral_width
-        self.right = self.sidebands + integral_width+1
-        
-        self.HH_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.harmonics-integral_width,self.harmonics+integral_width+1), 
-                                                                               axis=None), axis=1)[1::2]), axis=2)
-        self.SB_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.left,self.right), 
-                                                                               axis=None), axis=1)[1::2]), axis=2)
-        
-    
-    
     def plot_oscillation(self, oscillation, labels=None, fig_number=None, delay_unit='fs',
                          size_hor=10, size_ver=8, saving=False):
         '''plots multiple oscillations in seperate subplots with line coloring showing their energies,
@@ -888,6 +804,91 @@ class RABBITT_scan():
 
 
 
+    def _calculate_asymmetry_parameter(self, origin=default_origin):
+        """
+        Calculates signal difference between top and bottom half of the image.
+        TODO: this method is still in development
+
+        Parameters
+        ----------
+        origin : 2-tuple of int, optional
+            Image center in pixels. The default can be set globally.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        for i, inverted_image in tqdm(enumerate(self.inverted_scan), total=self.nsteps):
+            top_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
+                                            theta_low=0, theta_high=np.pi)[1]
+            low_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
+                                            theta_low=-np.pi, theta_high=0)[1]
+            parameter = (top_half - low_half)
+            self.speed_distributions[i] = parameter[:600]
+            
+            self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
+            self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
+            self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
+            
+    
+    
+    def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None):
+        '''
+        Normalizes data in a way that is useful for the RABBITT-analysis
+        and extracts the integrals of sidband and harmonic signal.
+
+        Parameters
+        ----------
+        integral_width : int, optional
+            Specifies how many bins either side of the sideband/harmonic maximum
+            are taken into account for the integral. The default is 2.
+        
+        smoothE : int, optional
+            Can be specified to smooth the data along the energy axis.
+            The integer will specify the size of the smoothing kernel.
+            The default is None, which deactivates smoothing completely.
+        
+        smoothT : int, optional
+            If smoothing is done along the energy axis,
+            this can be specified to smooth the data along the time axis.
+            The integer will specify the size of the smoothing kernel.
+            The default is None, which deactivates smoothing along this axis.
+
+        Returns
+        -------
+        None.
+
+        '''
+        
+        self.speed_distribution_norm = normalized(self.speed_distribution_jacobi, 'sum')
+        
+        # Normalize signal for each delay step
+        self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
+        
+        # Smooth data if specified
+        if (smoothE is None) or (smoothE == 0):
+            self.data_smooth = self.data_norm
+        elif (smoothT is None) or (smoothT == 0):
+            self.data_smooth = util.smooth_1D(self.data_norm.T, smoothE, 'hanning').T
+        else:
+            self.data_smooth = util.smooth_2D(self.data_norm, smoothT, smoothE)
+        
+        # Calculate changes from average signal
+        self.data_diff = self.data_smooth - normalized(np.nansum(self.data_smooth, axis=0), 'sum')
+        
+        if self.left is None:  # don't overwrite if ranges have been determined already
+            self.left  = self.sidebands - integral_width
+            self.right = self.sidebands + integral_width+1
+        
+        self.HH_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.harmonics-integral_width,self.harmonics+integral_width+1), 
+                                                                               axis=None), axis=1)[1::2]), axis=2)
+        self.SB_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.left,self.right), 
+                                                                               axis=None), axis=1)[1::2]), axis=2)
+        
+    
+    
     def plot_phase_diagram(self, indicator='points', show_amplitude=False, 
                            left=None, right=None, show_errors=False, saving=False,
                            show_external=False):
@@ -1106,7 +1107,8 @@ class RABBITT_scan():
 
         
         
-    def select_sideband_ranges(self, manual_selection=False, dist=None):
+    def select_sideband_ranges(self, manual_selection=False, 
+                               integral_width=None, dist=None):
         """
         Calculates the positions and ranges of the sideband oscillations in terms of their modulation amplitude.
     
@@ -1115,7 +1117,12 @@ class RABBITT_scan():
         manual_selection: bool, optional
             Choose whether to open an interactive plot to manually select. 
             The default is False.
-        dist : int, optional
+        integral width : int or None, optional
+            Specify to just use an integer number of bins either side of the
+            sideband intensity maximum.
+            The default is None which does look at the modulation amplitude.
+            Only read if  manual_election is False.
+        dist : int or None, optional
             How many pixels off the pre-given walues to look for max.
             Default is None, which looks inside the previous integration ranges.
     
@@ -1140,6 +1147,9 @@ class RABBITT_scan():
         if manual_selection:
             self.left, self.right = util.select_ranges(self.plot_phase_diagram, self.energies,
                                                        show_amplitude=True, indicator='range')
+        elif integral_width is not None:
+            self.left  = self.sidebands - integral_width
+            self.right = self.sidebands + integral_width+1            
         else:    
             if dist is None:   # look for maximum inside the pre-made selection
                 left = self.left
