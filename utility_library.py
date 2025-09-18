@@ -12,6 +12,12 @@ from matplotlib import pyplot as plt
 import scipy.signal
 import warnings
 
+#%% Physical constants
+
+ionization_energies = {'He': 24.587, 'Ne': 21.565, 'Ar': 15.760, 'Kr': 14.000, 'Xe': 12.13,
+                       'CH4': 13.6, 'CH3': 14.8, 'CH2': 15.8, 'CH': 22.9} # [eV]
+
+
 #%% Data Structures and typecasting
 
 def my_tuple(array):

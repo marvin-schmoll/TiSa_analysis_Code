@@ -42,9 +42,6 @@ CEP_factor = 9.6406e-4  # calibration factor wedge distance to CEP distance
 
 E_IR = h / (2*np.pi) * omega_IR   # [eV]
 
-ionization_energies = {'He': 24.587, 'Ne': 21.565, 'Ar': 15.760, 'Kr': 14.000, 'Xe': 12.13,
-                       'CH4': 13.6, 'CH3': 14.8, 'CH2': 15.8, 'CH': 22.9} # in eV
-
 default_origin = (967, 607)  # Change (!) here if VMI camera was moved
 
 
@@ -162,7 +159,7 @@ class RABBITT_scan():
         self.types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
         self.scan_type = self.types.NONE                                        # type of scan performed
         
-        self.gas, self.Ip = gas, ionization_energies[gas]                       # gas used in the VMI, its ionization potential
+        self.gas, self.Ip = gas, util.ionization_energies[gas]                  # gas used in the VMI, its ionization potential
         self.name = name
         
         self.scan = self.inverted_scan = None                                   # collection of 2D images before and after Abel inversion
@@ -884,8 +881,8 @@ class RABBITT_scan():
         
         self.HH_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.harmonics-integral_width,self.harmonics+integral_width+1), 
                                                                                axis=None), axis=1)[1::2]), axis=2)
-        self.SB_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.left,self.right), 
-                                                                               axis=None), axis=1)[1::2]), axis=2)
+        cutted = np.split(self.data_diff, np.sort((self.left,self.right), axis=None), axis=1)[1::2]
+        self.SB_oscillation = np.array([np.sum(cutted[i], axis=1) for i in range(len(cutted))])
         
     
     
@@ -1178,19 +1175,19 @@ class RABBITT_scan():
 
 if __name__ == "__main__":
 
-    hasi = RABBITT_scan('Ar')
-    hasi.read_scan_files()
-    hasi.perform_abel_inversion(theta=(0, np.pi))
+    hasi = RABBITT_scan('Ar')                      # initialize scan object
+    hasi.read_scan_files()                         # read .h5 measurement data 
+    hasi.perform_abel_inversion(theta=(0, np.pi))  # abel invert, integrate upper image half
     
 #%%%
-    hasi.energy_scale()
-    hasi.time_scale(100, 'mrad')
+    hasi.energy_scale()                            # calibrate energy axis 
+    hasi.phase_scale(100, 'mrad')                  # apply phase axis
     
     hasi.plot_RABBITT_trace(hasi.speed_distributions, delay_unit='fs', energy_unit='v')
     hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
     
-    hasi.do_cosine_fit(plotting=False)
-    hasi.calculate_sideband_ranges()
+    hasi.do_cosine_fit(plotting=False)             # cosine-fit for every energy
+    hasi.select_sideband_ranges(dist=10)           # select sb integration ranges
     
     legend_names = [hasi._legend_name(n_SB) for n_SB in hasi.n_sidebands]
     hasi.plot_oscillation(hasi.SB_oscillation, legend_names, hasi._prefix() + 'Sideband Oscillation')    
