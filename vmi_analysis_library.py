@@ -469,6 +469,7 @@ class RABBITT_scan():
             speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], origin=origin,
                                           theta_low=theta[0], theta_high=theta[1])
             self.speed_distributions[i] = speeds[1][:600]
+            self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
     
     
     
@@ -588,7 +589,6 @@ class RABBITT_scan():
         def velocity(n, a, b):   # n, b in [harm. orders]; a in [samples^2/harm. order]
             return np.sqrt(a * (n+b))   # output in [samples]
         
-        self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
         peaks, properties = scipy.signal.find_peaks(self.speed_distribution[0:max_pixel], 
                                                     height=height, prominence=prominence,
                                                     width=width)
@@ -642,7 +642,55 @@ class RABBITT_scan():
         self.n_harmonics = np.array(n_harmonics)
         self.sidebands = np.array(sidebands)
         self.n_sidebands = np.array(n_sidebands)
+    
+    
+    def save_energy_scale(self):
+        '''saves the energy scale and peak locations of a scan'''
         
+        filetypes = [('HDF5 dataset','*.h5')]
+            
+        root = tk.Tk()
+        root.withdraw()
+        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
+                                 filetypes=filetypes)
+        root.destroy()    
+        print("Saving at: " + path)
+        
+        if path.split(".")[-1] == "h5": # Save as h5 dataset
+            with h5py.File(path, "w") as f:
+                f.create_dataset("speed_axis", data=self.speed_axis)
+                f.create_dataset("energy_axis", data=self.energies)
+                f.create_dataset("velocity_axis", data=self.velocity_axis)
+                f.create_dataset("harmonic_locations", data=self.harmonics)
+                f.create_dataset("harmonic_orders", data=self.n_harmonics)
+                f.create_dataset("sideband_locations", data=self.sidebands)
+                f.create_dataset("sideband_orders", data=self.n_sidebands)
+    
+    def read_energy_scale(self):
+        '''Reads h5 files containing the energy calibration'''
+            
+        filetypes = [('HDF5 dataset','*.h5')]
+            
+        root = tk.Tk()
+        root.withdraw()
+        path = askopenfilename(title='Open file containing energy scale', 
+                               defaultextension=".h5", filetypes=filetypes)
+        root.destroy()    
+        
+        if path.split(".")[-1] == "h5": # Read from h5 dataset
+            with h5py.File(path, "r") as f:
+                self.speed_axis = np.array(f['speed_axis'])
+                self.energies = np.array(f['energy_axis'])
+                self.velocity_axis = np.array(f['velocity_axis'])
+                self.harmonics = np.array(f['harmonic_locations'])
+                self.n_harmonics = np.array(f['harmonic_orders'])
+                self.sidebands = np.array(f['sideband_locations'])
+                self.n_sidebands = np.array(f['sideband_orders'])
+        
+        # Multiplying by Jacobi determinant for plotting of PES
+        self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
+        self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
+    
     
     
     def time_scale(self, step, step_unit='um'):
@@ -825,7 +873,6 @@ class RABBITT_scan():
             parameter = (top_half - low_half)
             self.speed_distributions[i] = parameter[:600]
             
-            self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
             self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
             self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
             
