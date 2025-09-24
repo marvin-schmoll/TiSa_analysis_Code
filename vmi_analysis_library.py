@@ -602,7 +602,7 @@ class RABBITT_scan():
         
         nn = np.arange(len(peaks))*peak_distance
         popt, pcov = curve_fit(velocity, nn, peaks, p0=[1e4,1])
-        plotrange = np.arange(-popt[1]/peak_distance,len(peaks),0.01)
+        plotrange = np.linspace(-popt[1]/peak_distance,len(peaks),10000)
         print(popt)
         
         plt.figure(num='Speed curve-fit', clear=True)
@@ -753,9 +753,9 @@ class RABBITT_scan():
             
         else: raise ValueError('Given step type not supported, try e.g. "um" or "mrad"')
         
-        self.distances = np.arange(0, self.nsteps*delta_x, delta_x)
-        self.times = np.arange(0, self.nsteps*delta_t, delta_t)
-        self.angles = np.arange(0, self.nsteps*delta_phi, delta_phi)
+        self.distances = np.linspace(0, self.nsteps*delta_x, self.nsteps)
+        self.times = np.linspace(0, self.nsteps*delta_t, self.nsteps)
+        self.angles = np.linspace(0, self.nsteps*delta_phi, self.nsteps)
     
     
     
