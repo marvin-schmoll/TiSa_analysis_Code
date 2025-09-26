@@ -269,7 +269,7 @@ class RABBITT_scan():
 
 
 
-    def read_scan_files(self, files=None, bfile=''):
+    def read_scan_files(self, files=None, bfile='', use_steps=slice(None)):
         """
         Reads a selection of h5-files corresponding to a scan and averages them.
 
@@ -283,6 +283,8 @@ class RABBITT_scan():
             Only relevant when 'files' is not None.
             The default is '', which uses the internal background image saved 
             in the h5 file if available for subtraction.
+        use_steps : slice
+            Specify which delay steps include. Default is to use all.
 
         Returns
         -------
@@ -318,6 +320,7 @@ class RABBITT_scan():
         if bfile: self.scan = scan.T - bimage.T * n_files
         else:     self.scan = scan.T - bimage.T
         
+        self.scan = self.scan[use_steps]
         self.nsteps = len(self.scan)
 
 
@@ -336,8 +339,8 @@ class RABBITT_scan():
 
 
 
-    def save_scan_images(self):
-        '''Saves the raw VMI images of the scan'''
+    def save_scan_images(self, include_inverted=False):
+        '''Saves the raw or inverted VMI images of the scan'''
             
         filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
             
@@ -349,24 +352,31 @@ class RABBITT_scan():
         print("Saving at: " + path)
         
         if path.split(".")[-1] == "npy": # Save as numpy binary file
-            np.save(path, self.scan)
+            if include_inverted: np.save(path, self.scan)
+            else:                np.save(path, self.inverted_scan)
         
         elif path.split(".")[-1] == "h5": # Save as h5 dataset
             with h5py.File(path, "w") as f:
                 f.create_dataset("scan", data=self.scan)
+                if include_inverted:
+                    f.create_dataset("inverted_scan", data=self.inverted_scan)
+                    f.create_dataset("speed_distributions", data=self.speed_distributions)
 
 
 
-    def read_scan_images(self):
+    def read_scan_images(self, files=None):
         '''Reads h5 or npy files containing the raw VMI images of the scan'''
-            
-        filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
-            
-        root = tk.Tk()
-        root.withdraw()
-        path = askopenfilename(title='Open scan file containing raw VMI images', 
-                               defaultextension=".h5", filetypes=filetypes)
-        root.destroy()    
+        
+        if type(files) is str:
+            files = [files]
+        
+        if files is None:
+            filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
+            root = tk.Tk()
+            root.withdraw()
+            path = askopenfilename(title='Open scan file containing raw VMI images', 
+                                   defaultextension=".h5", filetypes=filetypes)
+            root.destroy()    
         
         if path.split(".")[-1] == "npy": # Read numpy binary file
             self.scan = np.load(path)
@@ -473,29 +483,6 @@ class RABBITT_scan():
                                           theta_low=theta[0], theta_high=theta[1])
             self.speed_distributions[i] = speeds[1][:600]
             self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
-    
-    
-    
-    def save_inverted_images(self):
-        '''Saves the inverted VMI images of the scan'''
-            
-        filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
-            
-        root = tk.Tk()
-        root.withdraw()
-        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
-                                 filetypes=filetypes)
-        root.destroy()    
-        print("Saving at: " + path)
-        
-        if path.split(".")[-1] == "npy": # Save as numpy binary file
-            np.save(path, self.inverted_scan)
-        
-        elif path.split(".")[-1] == "h5": # Save as h5 dataset
-            with h5py.File(path, "w") as f:
-                f.create_dataset("scan", data=self.scan)
-                f.create_dataset("inverted_scan", data=self.inverted_scan)
-                f.create_dataset("speed_distributions", data=self.speed_distributions)
 
 
 
