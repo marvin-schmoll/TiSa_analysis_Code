@@ -195,7 +195,10 @@ class RABBITT_scan():
     
     def _legend_name(self, order, pre='SB'):
         '''returns names as 'SB14' for plot legends'''
-        return pre + str(np.round(order, 1))
+        if type(order) in (int, float):
+            return pre + str(np.round(order, 1))
+        elif type(order) in (np.ndarray, list, tuple):
+            return ['SB' + str(np.round(o, 1)) for o in order]
 
 
     def _phase_axis(self, unit='n'):
@@ -759,58 +762,72 @@ class RABBITT_scan():
     
     
     
-    def plot_oscillation(self, oscillation, labels=None, fig_number=None, delay_unit='fs',
-                         size_hor=10, size_ver=8, saving=False):
+    def plot_oscillation(self, oscillation, labels=None, popts=None, fig_number=None, 
+                         delay_unit='fs', size_hor=10, size_ver=8, saving=False):
         '''plots multiple oscillations in seperate subplots with line coloring showing their energies,
             each having a seperate axis indicating their relative intensity
             if only one is given, the function also works'''
-
+    
         x_axis, x_label, x_linarity = self._phase_axis(delay_unit)
         plt.figure(num=fig_number, clear=True, figsize=(size_hor, size_ver))
-
+        scaling = 1e3  # to stretch all to make numbers with less decimals
+        
+        if popts is not None:
+            fit_x_axis = np.linspace(x_axis[0], x_axis[-1], 1000)
+            def cos(t, omega, phi, a, b): # fittable cosine with linear background
+                return a * np.cos(omega*omega_IR * t - phi) + b * t
+    
         # plot multiple oscillations in one figure
         if len(np.shape(oscillation)) == 2:
-            gs = gridspec.GridSpec(len(oscillation), 1)
-            colors = util.rainbow_colors(len(oscillation), 1.3) # spectral colormap from red to blue
-            for i in range(len(oscillation)):
+            n_subfigs = len(oscillation)
+            gs = gridspec.GridSpec(n_subfigs, 1)
+            colors = util.rainbow_colors(n_subfigs, 1.3) # spectral colormap from red to blue
+            darker_colors = util.rainbow_colors(n_subfigs, 2) # spectral colormap from red to blue
+            for i in range(n_subfigs):
                 if i==0:
                     ax0 = plt.subplot(gs[i])
-
-                    pl, = ax0.plot(x_axis, oscillation[len(oscillation)-1-i]*1e3, 'x-', 
-                                   lw=0.8, ms=6, color=colors[len(oscillation)-1-i])
+    
+                    pl, = ax0.plot(x_axis, oscillation[n_subfigs-1-i]*scaling, 'x-', 
+                                   lw=0.8, ms=6, color=colors[n_subfigs-1-i])
+                    if popts is not None:
+                        pl, = ax0.plot(fit_x_axis, cos(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
+                                        lw=0.6, color=darker_colors[n_subfigs-1-i])
                     axl=ax0
                 else:
                     axi = plt.subplot(gs[i], sharex=axl)
-
-                    pl, = axi.plot(x_axis, oscillation[len(oscillation)-1-i]*1e3, 'x-', 
-                                   lw=0.8, ms=6, color=colors[len(oscillation)-1-i])
-
+    
+                    pl, = axi.plot(x_axis, oscillation[n_subfigs-1-i]*scaling, 'x-', 
+                                   lw=0.8, ms=6, color=colors[n_subfigs-1-i])
+                    if popts is not None:
+                        pl, = axi.plot(fit_x_axis, cos(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
+                                        lw=0.6, color=darker_colors[n_subfigs-1-i])
+    
                     yticks = axi.yaxis.get_major_ticks()
                     yticks[-1].label1.set_visible(False)
-                    if i != len(oscillation) - 1:
+                    if i != n_subfigs - 1:
                         axi.tick_params(axis='x', labelbottom=False)
                     axl=axi
-
+    
                 if i==int(len(oscillation-1)/2): # put ylabel only on the middle plot
                     plt.ylabel('count difference (a.u.) \n')
-
+    
                 plt.grid(axis='both')
                 if labels is not None:
-                    plt.legend([labels[len(oscillation)-1-i]], loc='upper left',
-                               bbox_to_anchor=(0.07-0.01*len(oscillation),1.03)) # change label position here !!
-
+                    plt.legend([labels[n_subfigs-1-i]], loc='upper left',
+                               bbox_to_anchor=(0.07-0.01*n_subfigs,1.03)) # change label position here !!
+    
             plt.setp(ax0.get_xticklabels(), visible=False)
             plt.subplots_adjust(hspace=.0)
-
+    
         # plot just one oscillation
         if len(np.shape(oscillation)) == 1:
             plt.plot(x_axis, oscillation/np.max(np.abs(oscillation)), 'x-', color='b')
-
+    
         plt.xlabel(x_label)
         plt.xlim([x_axis[0], x_axis[-1]])
-
+    
         if saving: plt.savefig('rabbitt_oscillation.pdf', dpi=400)
-        plt.show()        
+        plt.show()
     
        
     
@@ -1214,6 +1231,81 @@ class RABBITT_scan():
         self.plot_phase_diagram('range', True, self.left, self.right)
     
         return self.left, self.right
+
+
+
+    def phases_cosine(self, oscillation=None, labels=None, omega=2):
+        """
+        Fit the phases of sidebands (or harmonics) alredy integrated over a region.
+    
+        Parameters
+        ----------
+        oscillation : list of np.arrays, optional
+            List of arrays each containing data values along the common time axis
+            representing an oscillation to fit. Typical choices are the variables
+            self.SB_oscillation and self.HH_oscillation from within this library,
+            the former is selected by default / if None is passed.
+        labels : list of str, optional
+            Labels for the plots representing the fits. 
+            Per default or for None, sideband labels are generated and used.
+        omega : int or float, optional
+            The frequency of the angular component to be fitted in units of omega_IR.
+            The default is 2, which captures RABBITT with harmonics spaced 2*E_IR.
+            Use 1 for harmonics spaced 1*E_IR or the Ti:Sa CEP scan.
+    
+        Returns
+        -------
+        self.phases : np.array
+            Array of the phases determined by each fit.
+        self.phase_errors : np.array
+            Array of the phases uncertainties determined by each fit.
+    
+        """
+            
+        if oscillation is None:
+            oscillation = self.SB_oscillation
+        if labels is None:
+            labels = self._legend_name(self.n_sidebands)
+    
+        def cos(t, phi, a, b): # fittable cosine with linear background
+            return a * np.cos(omega*omega_IR * t - phi) + b * t
+        
+        self.phases = np.array([])
+        self.phase_errors = np.array([])
+        cos_fit_popts = []
+    
+        try: tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
+        except AttributeError: # time scale has not jet been calculated
+            self.time_steps() # calculate the time scale
+            tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
+    
+    
+        for i in range(len(oscillation)):
+    
+            # perform cosine fit
+            normalization = np.max(np.abs(oscillation[i])) # to make initial guess closer
+            popt, pcov = scipy.optimize.curve_fit(cos, self.times, oscillation[i]/normalization)
+            popt[1:] *= normalization
+            # write down phase parameters
+            cos_fit_popts.append(np.append(omega, popt))
+            if popt[1] > 0:
+                self.phases = np.append(self.phases, (popt[0])%(2*np.pi))
+            else:
+                self.phases = np.append(self.phases, (popt[0]+np.pi)%(2*np.pi))
+            print(self._prefix() + labels[i] + ': ' + str(self.phases[-1]*180/np.pi) + ' +- ' + str(pcov[0][0]*180/np.pi))
+            self.phase_errors = np.append(self.phase_errors, pcov[0][0])
+    
+            # show corresponding plot
+            plt.figure((self._prefix() + labels[i]), clear=True)
+            plt.plot(self.times, oscillation[i], 'x-', color='r', label='measurement')
+            plt.plot(tt, cos(tt, *popt), color='b', label='fit')
+            plt.xlabel('assumed time [fs]')
+            plt.ylabel('normalized count difference')
+            plt.legend()
+            plt.show()
+    
+        self.cos_fit_popts = np.array(cos_fit_popts)
+        return self.phases, self.phase_errors
 
 
 
