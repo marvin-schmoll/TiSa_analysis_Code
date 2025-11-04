@@ -167,7 +167,7 @@ class RABBITT_scan():
         self.speed_distributions_jacobi = self.speed_distribution_jacobi = None # same, multiplied by jacobi determinant
         self.speed_distribution_norm = None                                     # normalized speed distribution (integral is 1) 
         self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
-        self.min_energy, self.max_energy = 0, 20                                # energy limits in eV used for plotting
+        self.min_energy, self.max_energy = 0, 19                                # energy limits in eV used for plotting
         self.times = self.angles = self.distances = None                        # x axis [fs], [rad] and [mm] of 800nm
         self.nsteps = None                                                      # number of delay steps
         
@@ -656,19 +656,19 @@ class RABBITT_scan():
                 f.create_dataset("sideband_locations", data=self.sidebands)
                 f.create_dataset("sideband_orders", data=self.n_sidebands)
     
-    def read_energy_scale(self):
+    def read_energy_scale(self, file=None):
         '''Reads h5 files containing the energy calibration'''
             
-        filetypes = [('HDF5 dataset','*.h5')]
-            
-        root = tk.Tk()
-        root.withdraw()
-        path = askopenfilename(title='Open file containing energy scale', 
-                               defaultextension=".h5", filetypes=filetypes)
-        root.destroy()    
+        if file is None:
+            filetypes = [('HDF5 dataset','*.h5')]
+            root = tk.Tk()
+            root.withdraw()
+            file = askopenfilename(title='Open file containing energy scale', 
+                                   defaultextension=".h5", filetypes=filetypes)
+            root.destroy()    
         
-        if path.split(".")[-1] == "h5": # Read from h5 dataset
-            with h5py.File(path, "r") as f:
+        if file.split(".")[-1] == "h5": # Read from h5 dataset
+            with h5py.File(file, "r") as f:
                 self.speed_axis = np.array(f['speed_axis'])
                 self.energies = np.array(f['energy_axis'])
                 self.velocity_axis = np.array(f['velocity_axis'])
@@ -832,7 +832,7 @@ class RABBITT_scan():
         im.set_data(x_axis, y_axis, data_2D.T)
         ax.add_image(im)
         ax.set_xlim(x_axis[0], x_axis[-1])
-        ax.set_ylim(y_axis[0], y_axis[-1])
+        ax.set_ylim(self.min_energy, self.max_energy)
         ima = matplotlib.image.AxesImage(ax)
         if clim is None:
             ima.set_clim(np.min(data_2D), np.max(data_2D))
