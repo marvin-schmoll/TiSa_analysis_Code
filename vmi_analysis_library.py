@@ -175,6 +175,7 @@ class RABBITT_scan():
         self.n_harmonics = self.n_sidebands = None                              # order of HH/SB
         self.left = self.right = None                                           # left and right edges of sidebands
         self.HH_oscillation = self.SB_oscillation = None                        # signal oscillation averaged over each HH/SB
+        self.HH_intensities = self.SB_intensities = None                        # intensitiy of each HH/SB
         
         self.data_norm = self.data_diff = None                                  # speed distributions normalized and speed distribution differences from average
         
@@ -926,14 +927,17 @@ class RABBITT_scan():
         # Calculate changes from average signal
         self.data_diff = self.data_smooth - normalized(np.nansum(self.data_smooth, axis=0), 'sum')
         
-        if self.left is None:  # don't overwrite if ranges have been determined already
-            self.left  = self.sidebands - integral_width
-            self.right = self.sidebands + integral_width+1
+        self.left  = self.sidebands - integral_width
+        self.right = self.sidebands + integral_width+1
         
         self.HH_oscillation = np.sum(np.array(np.split(self.data_diff, np.sort((self.harmonics-integral_width,self.harmonics+integral_width+1), 
                                                                                axis=None), axis=1)[1::2]), axis=2)
+        cut = np.split(self.speed_distribution_norm, np.sort((self.harmonics-integral_width,self.harmonics+integral_width+1), axis=None))[1::2]
+        self.HH_intensities = np.array([np.mean(c) for c in cut])
         cutted = np.split(self.data_diff, np.sort((self.left,self.right), axis=None), axis=1)[1::2]
-        self.SB_oscillation = np.array([np.sum(cutted[i], axis=1) for i in range(len(cutted))])
+        self.SB_oscillation = np.array([np.sum(c, axis=1) for c in cutted])
+        cut = np.split(self.speed_distribution_norm, np.sort((self.left,self.right), axis=None))[1::2]
+        self.SB_intensities = np.array([np.mean(c) for c in cut])
         
     
     
@@ -1211,9 +1215,10 @@ class RABBITT_scan():
                 self.left[i] = fwhm_data[1][0] + left[i]
                 self.right[i] = fwhm_data[1][2] + left[i]
             
-    
         cutted = np.split(self.data_diff, np.sort((self.left,self.right), axis=None), axis=1)[1::2]
-        self.SB_oscillation = np.array([np.sum(cutted[i], axis=1) for i in range(len(cutted))])
+        self.SB_oscillation = np.array([np.sum(c, axis=1) for c in cutted])
+        cut = np.split(self.speed_distribution_norm, np.sort((self.left,self.right), axis=None))[1::2]
+        self.SB_intensities = np.array([np.mean(c) for c in cut]) #TODO: probably we should so smth for HH as well here
         
         self.plot_phase_diagram('range', True, self.left, self.right)
     
