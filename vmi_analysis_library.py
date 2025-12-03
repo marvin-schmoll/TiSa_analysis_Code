@@ -20,6 +20,8 @@ import cmasher as cmr # makes better colormaps available, comment out if not ins
 import scipy.signal
 from scipy.optimize import curve_fit
 import warnings
+
+from dataclasses import dataclass, field
 from enum import Enum
 
 import abel
@@ -150,42 +152,77 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
     return R[:, 0], intensity
 
 
-
+@dataclass
 class RABBITT_scan():
     
-    def __init__(self, gas, name=None):
-        '''currently empty as functionality is tranferred to the class'''
+    # --- Required constructor arguments ---
+    gas: str                                                # gas used in the VMI
+    name: str | None = None
+    
+    # --- Scan data ---
+    scan: np.ndarray | None = None                          # collection of 2D images before Abel inversion
+    inverted_scan: np.ndarray | None = None                 # collection of 2D images after Abel inversion
+    nsteps: int | None = None                               # number of delay steps
+    
+    # --- Speed distributions ---
+    speed_distributions: np.ndarray | None = None           # speed distributions obtained from angular integration of inverted images
+    speed_distribution: np.ndarray | None = None            # single speed distribution integrated over array
+    speed_distributions_jacobi: np.ndarray | None = None    # speed distributions multiplied by jacobi determinant
+    speed_distribution_jacobi: np.ndarray | None = None     # integrated speed distribution multiplied by jacobi determinant
+    speed_distribution_norm: np.ndarray | None = None       # normalized speed distribution (integral is 1)
+    
+    # --- Axes ---
+    speed_axis: np.ndarray | None = None                    # photoelectron spectrum axis: speed in samples
+    energies: np.ndarray | None = None                      # photoelectron spectrum axis: energy in eV
+    velocity_axis: np.ndarray | None = None                 # photoelectron spectrum axis: velocity in m/s
+    min_energy: float = 0                                   # lower energy limit for plotting
+    max_energy: float = 19                                  # upper energy limit for plotting
+    times: np.ndarray | None = None                         # scan axis: [fs] of 800nm
+    angles: np.ndarray | None = None                        # scan axis: [rad] of 800nm
+    distances: np.ndarray | None = None                     # scan axis: [mm]
+    
+    # --- Harmonics & sidebands ---
+    harmonics: np.ndarray | None = None                     # pixel positions of HH-peaks
+    sidebands: np.ndarray | None = None                     # pixel positions of SB-peaks
+    n_harmonics: np.ndarray | None = None                   # order of HH
+    n_sidebands: np.ndarray | None = None                   # order of SB
+    left: np.ndarray | None = None                          # left edges of sidebands
+    right: np.ndarray | None = None                         # right edges of sidebands
+    HH_oscillation: np.ndarray | None = None                # signal oscillation averaged over each HH
+    SB_oscillation: np.ndarray | None = None                # signal oscillation averaged over each SB
+    HH_intensities: np.ndarray | None = None                # intensitiy of each HH
+    SB_intensities: np.ndarray | None = None                # intensitiy of each SB
+       
+    # --- Normalized / differential data ---
+    data_norm: np.ndarray | None = None                     # speed distributions normalized
+    data_diff: np.ndarray | None = None                     # speed distribution differences from average
+    data_smooth: np.ndarray | None = None                   # speed distributions smoothed
+    
+    # --- Energy-resolved results for oscillations ---
+    phase_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    phase_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    depth_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    depth_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    slope_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    slope_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    contrast_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    contrast_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    
+    # --- Fit results for integrated sidebands ---
+    phases: np.ndarray | None = None
+    phase_errors: np.ndarray | None = None
+    cos_fit_popts: np.ndarray | None = None
+    
+    
+    def __post_init__(self):
+        '''detrmine ionization potential, initialize enum for scan type'''
+        self.Ip = util.ionization_energies[self.gas]    # ionization potential
         
         self.types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
-        self.scan_type = self.types.NONE                                        # type of scan performed
-        
-        self.gas, self.Ip = gas, util.ionization_energies[gas]                  # gas used in the VMI, its ionization potential
-        self.name = name
-        
-        self.scan = self.inverted_scan = None                                   # collection of 2D images before and after Abel inversion
-        self.speed_distributions = self.speed_distribution = None               # speed distributions obtained from angular integration of inverted images, single speed distribution integrated over array
-        self.speed_distributions_jacobi = self.speed_distribution_jacobi = None # same, multiplied by jacobi determinant
-        self.speed_distribution_norm = None                                     # normalized speed distribution (integral is 1) 
-        self.speed_axis = self.energies = self.velocity_axis = None             # axes for the photoelectron spectrum, speed in samples, energy in eV, velocity in m/s
-        self.min_energy, self.max_energy = 0, 19                                # energy limits in eV used for plotting
-        self.times = self.angles = self.distances = None                        # x axis [fs], [rad] and [mm] of 800nm
-        self.nsteps = None                                                      # number of delay steps
-        
-        self.harmonics = self.sidebands = None                                  # pixel positions of HH/SB-peaks
-        self.n_harmonics = self.n_sidebands = None                              # order of HH/SB
-        self.left = self.right = None                                           # left and right edges of sidebands
-        self.HH_oscillation = self.SB_oscillation = None                        # signal oscillation averaged over each HH/SB
-        self.HH_intensities = self.SB_intensities = None                        # intensitiy of each HH/SB
-        
-        self.data_norm = self.data_diff = None                                  # speed distributions normalized and speed distribution differences from average
-        
-        self.phase_by_energy = self.phase_by_energy_error = np.array([])        # oscillation phase and uncertainty
-        self.depth_by_energy = self.depth_by_energy_error = np.array([])        # oscillation depth and uncertainty
-        self.slope_by_energy = self.slope_by_energy_error = np.array([])        # slope for oscillation reconstruction and uncertainty
-        self.contrast_by_energy = self.contrast_by_energy_error = np.array([])  # oscillation contrast and uncertainty
- 
+        self.scan_type = self.types.NONE                # type of scan performed
     
       
+    
     def _prefix(self):
         '''changes the name like "name: " to create separate plots for each intance of the class'''
         if self.name is None or self.name == '':
