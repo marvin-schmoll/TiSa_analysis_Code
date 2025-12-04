@@ -22,6 +22,7 @@ from scipy.optimize import curve_fit
 import warnings
 
 from dataclasses import dataclass, field
+from typing import Optional, Tuple
 from enum import Enum
 
 import abel
@@ -153,7 +154,7 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
 
 
 @dataclass
-class RABBITT_scan():
+class VMI_scan():
     
     # --- Required constructor arguments ---
     gas: str                                                # gas used in the VMI
@@ -169,7 +170,6 @@ class RABBITT_scan():
     speed_distribution: np.ndarray | None = None            # single speed distribution integrated over array
     speed_distributions_jacobi: np.ndarray | None = None    # speed distributions multiplied by jacobi determinant
     speed_distribution_jacobi: np.ndarray | None = None     # integrated speed distribution multiplied by jacobi determinant
-    speed_distribution_norm: np.ndarray | None = None       # normalized speed distribution (integral is 1)
     
     # --- Axes ---
     speed_axis: np.ndarray | None = None                    # photoelectron spectrum axis: speed in samples
@@ -186,32 +186,6 @@ class RABBITT_scan():
     sidebands: np.ndarray | None = None                     # pixel positions of SB-peaks
     n_harmonics: np.ndarray | None = None                   # order of HH
     n_sidebands: np.ndarray | None = None                   # order of SB
-    left: np.ndarray | None = None                          # left edges of sidebands
-    right: np.ndarray | None = None                         # right edges of sidebands
-    HH_oscillation: np.ndarray | None = None                # signal oscillation averaged over each HH
-    SB_oscillation: np.ndarray | None = None                # signal oscillation averaged over each SB
-    HH_intensities: np.ndarray | None = None                # intensitiy of each HH
-    SB_intensities: np.ndarray | None = None                # intensitiy of each SB
-       
-    # --- Normalized / differential data ---
-    data_norm: np.ndarray | None = None                     # speed distributions normalized
-    data_diff: np.ndarray | None = None                     # speed distribution differences from average
-    data_smooth: np.ndarray | None = None                   # speed distributions smoothed
-    
-    # --- Energy-resolved results for oscillations ---
-    phase_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
-    phase_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
-    depth_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
-    depth_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
-    slope_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
-    slope_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
-    contrast_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
-    contrast_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
-    
-    # --- Fit results for integrated sidebands ---
-    phases: np.ndarray | None = None
-    phase_errors: np.ndarray | None = None
-    cos_fit_popts: np.ndarray | None = None
     
     
     def __post_init__(self):
@@ -473,8 +447,8 @@ class RABBITT_scan():
 
 
 
-    def perform_abel_inversion(self, origin=default_origin,
-                               theta=(-np.pi,+np.pi), order=6, odd_orders=True):
+    def perform_abel_inversion(self, origin=default_origin, theta=(-np.pi,+np.pi), 
+                               order=6, odd_orders=True, save_internal=True):
         """
         Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
         
@@ -497,30 +471,47 @@ class RABBITT_scan():
         
         odd_orders : bool
             Include odd angular orders (by default is True)
+        
+        save_internal : bool
+            By default (True), the abel inversion results are written to class
+            variables. For direct use this is almost always the inteded option.
+            If set to False, the results will only be returned and a possibly
+            existing inversion will not be overwritten. This is for use with
+            the RABBITT class.
 
         Returns
         -------
-        None.
-    
+        speed_distributions : 2D np.array
+            The speeds obtained from abel inversion (integrated over angle).
+            
+        speed_distribution : 1D np.array
+            The average speeds obtained from abel inversion (integrated over 
+            angle and scan parameter).
         """
         
         if self.scan is None:
             message = "No scan loaded to perform Abel inversion on."
             raise AttributeError(message)
         
-        self.inverted_scan = np.zeros((self.nsteps,1920,1200))
-        self.speed_distributions = np.zeros((self.nsteps,600))
+        inverted_scan = np.zeros((self.nsteps,1920,1200))
+        speed_distributions = np.zeros((self.nsteps,600))
         
         for i, VMI_image in tqdm(enumerate(self.scan), total=self.nsteps):
             recon = abel.rbasex.rbasex_transform(self.scan[i].T, origin=origin[::-1], 
                                                      order=order, odd=odd_orders)
-            self.inverted_scan[i] = recon[0].T
+            inverted_scan[i] = recon[0].T
         
-            #speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
-            speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], origin=origin,
+            speeds = vmi_radial_intensity('int3D', inverted_scan[i], origin=origin,
                                           theta_low=theta[0], theta_high=theta[1])
-            self.speed_distributions[i] = speeds[1][:600]
-            self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
+            speed_distributions[i] = speeds[1][:600]
+            speed_distribution = normalized(speed_distributions.sum(axis=0))
+        
+        if save_internal:
+            self.inverted_scan = inverted_scan
+            self.speed_distributions = speed_distributions
+            self.speed_distribution = speed_distribution
+        
+        return speed_distributions, speed_distribution
 
 
 
@@ -785,7 +776,136 @@ class RABBITT_scan():
         self.times = np.linspace(0, self.nsteps*delta_t, self.nsteps)
         self.angles = np.linspace(0, self.nsteps*delta_phi, self.nsteps)
     
+
+
+    def _calculate_asymmetry_parameter(self, origin=default_origin):
+        """
+        Calculates signal difference between top and bottom half of the image.
+        TODO: this method is still in development
+
+        Parameters
+        ----------
+        origin : 2-tuple of int, optional
+            Image center in pixels. The default can be set globally.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        for i, inverted_image in tqdm(enumerate(self.inverted_scan), total=self.nsteps):
+            top_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
+                                            theta_low=0, theta_high=np.pi)[1]
+            low_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
+                                            theta_low=-np.pi, theta_high=0)[1]
+            parameter = (top_half - low_half)
+            self.speed_distributions[i] = parameter[:600]
+            
+            self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
+            self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
+            
     
+    
+@dataclass
+class RABBITT_scan():
+    #TODO: port set_energy_limit and proper handover of preset limit from vmi?
+    #TODO: port _phase_axis, _energy_axis and related stuff!
+    
+    # Option A — VMI input
+    vmi: Optional["VMI_scan"] = None
+    theta_range: Optional[Tuple[float, float]] = None
+
+    # Option B — direct data input
+    data: Optional[np.ndarray] = None
+    times: Optional[np.ndarray] = None
+    energies: Optional[np.ndarray] = None
+    
+    # Global options
+    min_energy: float = 0                                   # lower energy limit for plotting
+    max_energy: float = 19                                  # upper energy limit for plotting
+    
+    HH_oscillation: np.ndarray | None = None                # signal oscillation averaged over each HH
+    SB_oscillation: np.ndarray | None = None                # signal oscillation averaged over each SB
+    HH_intensities: np.ndarray | None = None                # intensitiy of each HH
+    SB_intensities: np.ndarray | None = None                # intensitiy of each SB
+    
+    # --- Normalized / differential data ---
+    data_norm: np.ndarray | None = None                     # speed distributions normalized
+    data_diff: np.ndarray | None = None                     # speed distribution differences from average
+    data_smooth: np.ndarray | None = None                   # speed distributions smoothed
+    
+    # --- Speed distributions ---
+    speed_distributions: np.ndarray | None = None           # speed distributions obtained from angular integration of inverted images
+    speed_distribution: np.ndarray | None = None            # single speed distribution integrated over array
+    speed_distributions_jacobi: np.ndarray | None = None    # speed distributions multiplied by jacobi determinant
+    speed_distribution_jacobi: np.ndarray | None = None     # integrated speed distribution multiplied by jacobi determinant
+    speed_distribution_norm: np.ndarray | None = None       # normalized speed distribution (integral is 1)
+    
+    # --- Harmonics & sidebands ---
+    harmonics: np.ndarray | None = None                     # pixel positions of HH-peaks
+    sidebands: np.ndarray | None = None                     # pixel positions of SB-peaks
+    n_harmonics: np.ndarray | None = None                   # order of HH
+    n_sidebands: np.ndarray | None = None                   # order of SB
+    left: np.ndarray | None = None                          # left edges of sidebands
+    right: np.ndarray | None = None                         # right edges of sidebands
+    
+    # --- Energy-resolved results for oscillations ---
+    phase_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    phase_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    depth_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    depth_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    slope_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    slope_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    contrast_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    contrast_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    
+    # --- Fit results for integrated sidebands ---
+    phases: np.ndarray | None = None
+    phase_errors: np.ndarray | None = None
+    cos_fit_popts: np.ndarray | None = None
+
+    def __post_init__(self):
+        """Initialize depending on which input was supplied."""
+
+        # Case 1 — Construct from VMI
+        if self.vmi is not None:
+            if self.theta_range is None:  # if no range specified use full image
+                self.theta_range = (-np.pi, np.pi)
+            self._build_from_vmi()
+            return
+
+        # Case 2 — Construct from explicit arrays
+        elif self.data is not None:
+            if self.times is None or self.energies is None:
+                raise ValueError("Must provide times and energies with data.")
+            raise NotImplementedError("It is planned but not yet tested to read data not from VMI")
+            # TODO: recalculate everything else needed?
+            return
+
+        # No valid input
+        raise ValueError("RABBITT_scan must be given either vmi + theta_range or data + times + energies.")
+
+
+    def _build_from_vmi(self):
+        """Internal helper to extract a RABBITT trace from a VMI_Scan."""
+        self.nsteps = self.vmi.nsteps
+        
+        self.times = self.vmi.times
+        self.speed_axis = self.vmi.speed_axis
+        self.energies = self.vmi.energies
+        
+        # TODO: check how to port over origin
+        self.speed_distributions, self.speed_distribution = \
+            self.vmi.perform_abel_inversion(theta=self.theta_range, save_internal=False)
+        
+        self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
+        self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
+        
+        self.harmonics, self.sidebands = self.vmi.harmonics, self.vmi.sidebands
+        self.n_harmonics, self.n_sidebands = self.vmi.n_harmonics, self.vmi.n_sidebands
+        
+
     
     def plot_oscillation(self, oscillation, labels=None, popts=None, fig_number=None, 
                          delay_unit='fs', size_hor=10, size_ver=8, saving=False):
@@ -793,7 +913,7 @@ class RABBITT_scan():
             each having a seperate axis indicating their relative intensity
             if only one is given, the function also works'''
     
-        x_axis, x_label, x_linarity = self._phase_axis(delay_unit)
+        x_axis, x_label, x_linarity = self.vmi._phase_axis(delay_unit)
         plt.figure(num=fig_number, clear=True, figsize=(size_hor, size_ver))
         scaling = 1e3  # to stretch all to make numbers with less decimals
         
@@ -861,8 +981,8 @@ class RABBITT_scan():
         '''plots the RABBITT-trace as colormap;
             no interpolation between datapoints is used to show the real resolution'''
 
-        x_axis, x_label, _ = self._phase_axis(delay_unit)
-        y_axis, y_label, _ = self._energy_axis(energy_unit)
+        x_axis, x_label, _ = self.vmi._phase_axis(delay_unit)
+        y_axis, y_label, _ = self.vmi._energy_axis(energy_unit)
         _, ax = plt.subplots(num=fig_number, clear=True, figsize=figsize)
 
         # works with nonuniform x-axis
@@ -891,35 +1011,6 @@ class RABBITT_scan():
 
 
 
-    def _calculate_asymmetry_parameter(self, origin=default_origin):
-        """
-        Calculates signal difference between top and bottom half of the image.
-        TODO: this method is still in development
-
-        Parameters
-        ----------
-        origin : 2-tuple of int, optional
-            Image center in pixels. The default can be set globally.
-
-        Returns
-        -------
-        None.
-
-        """
-        
-        for i, inverted_image in tqdm(enumerate(self.inverted_scan), total=self.nsteps):
-            top_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
-                                            theta_low=0, theta_high=np.pi)[1]
-            low_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
-                                            theta_low=-np.pi, theta_high=0)[1]
-            parameter = (top_half - low_half)
-            self.speed_distributions[i] = parameter[:600]
-            
-            self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
-            self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
-            
-    
-    
     def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None):
         '''
         Normalizes data in a way that is useful for the RABBITT-analysis
