@@ -155,6 +155,7 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
 
 @dataclass
 class VMI_scan():
+    '''class to manage VMI acquisitions'''
     
     # --- Required constructor arguments ---
     gas: str                                                # gas used in the VMI
@@ -164,6 +165,7 @@ class VMI_scan():
     scan: np.ndarray | None = None                          # collection of 2D images before Abel inversion
     inverted_scan: np.ndarray | None = None                 # collection of 2D images after Abel inversion
     nsteps: int | None = None                               # number of delay steps
+    theta_range: Tuple[float, float] | None = None          # angle range for abel inversion
     
     # --- Speed distributions ---
     speed_distributions: np.ndarray | None = None           # speed distributions obtained from angular integration of inverted images
@@ -507,6 +509,7 @@ class VMI_scan():
             speed_distribution = normalized(speed_distributions.sum(axis=0))
         
         if save_internal:
+            self.theta_range = theta
             self.inverted_scan = inverted_scan
             self.speed_distributions = speed_distributions
             self.speed_distribution = speed_distribution
@@ -809,12 +812,19 @@ class VMI_scan():
     
 @dataclass
 class RABBITT_scan():
-    #TODO: port set_energy_limit and proper handover of preset limit from vmi?
-    #TODO: port _phase_axis, _energy_axis and related stuff!
+    #TODO: below a list of what needs to be adressed before this version can be merged with main
+    #TODO1: port set_energy_limit and proper handover of preset limit from vmi?
+    #TODO2: port _phase_axis, _energy_axis and related stuff!
+    #TODO3: is this description complete? the one for VMI class should be already!
+    #TODO4: example code is probably broken now
+    #TODO5: the class needs a bit more documentation
+    #TODO6: make import of saved inverted spectra possible
+    #TODO7: it would be nice if new selection of angles does not need new abel inversion
     
     # Option A — VMI input
     vmi: Optional["VMI_scan"] = None
     theta_range: Optional[Tuple[float, float]] = None
+    origin: Tuple[float, float] = default_origin
 
     # Option B — direct data input
     data: Optional[np.ndarray] = None
@@ -870,8 +880,6 @@ class RABBITT_scan():
 
         # Case 1 — Construct from VMI
         if self.vmi is not None:
-            if self.theta_range is None:  # if no range specified use full image
-                self.theta_range = (-np.pi, np.pi)
             self._build_from_vmi()
             return
 
@@ -884,20 +892,25 @@ class RABBITT_scan():
             return
 
         # No valid input
-        raise ValueError("RABBITT_scan must be given either vmi + theta_range or data + times + energies.")
+        raise ValueError("RABBITT_scan must be given either vmi or data + times + energies.")
 
 
     def _build_from_vmi(self):
         """Internal helper to extract a RABBITT trace from a VMI_Scan."""
+        
         self.nsteps = self.vmi.nsteps
         
         self.times = self.vmi.times
         self.speed_axis = self.vmi.speed_axis
         self.energies = self.vmi.energies
         
-        # TODO: check how to port over origin
-        self.speed_distributions, self.speed_distribution = \
-            self.vmi.perform_abel_inversion(theta=self.theta_range, save_internal=False)
+        if self.theta_range is not None:   # abel invert for given angles
+            self.speed_distributions, self.speed_distribution = \
+                self.vmi.perform_abel_inversion(origin=self.origin, theta=self.theta_range, save_internal=False)
+        else:   # use angles and inversion from VMI class to save processor time
+            self.speed_distributions, self.speed_distribution = \
+                self.vmi.speed_distributions, self.vmi.speed_distribution
+            self.theta_range = self.vmi.theta_range
         
         self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
