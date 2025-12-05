@@ -870,7 +870,10 @@ class RABBITT_scan():
         im.set_data(x_axis, y_axis, data_2D.T)
         ax.add_image(im)
         ax.set_xlim(x_axis[0], x_axis[-1])
-        ax.set_ylim(self.min_energy, self.max_energy)
+        if x_axis is self.vmi.energies:
+            ax.set_ylim(self.min_energy, self.max_energy)
+        else:
+            ax.set_ylim(y_axis[0], y_axis[-1])
         ima = matplotlib.image.AxesImage(ax)
         if clim is None:
             ima.set_clim(np.min(data_2D), np.max(data_2D))
