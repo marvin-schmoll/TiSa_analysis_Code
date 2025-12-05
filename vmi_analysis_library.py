@@ -197,22 +197,6 @@ class VMI_scan():
         self.types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
         self.scan_type = self.types.NONE                # type of scan performed
     
-      
-    
-    def _prefix(self):
-        '''changes the name like "name: " to create separate plots for each intance of the class'''
-        if self.name is None or self.name == '':
-            return ''
-        else:
-            return str(self.name) + ': '
-    
-    
-    def _legend_name(self, order, pre='SB'):
-        '''returns names as 'SB14' for plot legends'''
-        if type(order) in (int, float):
-            return pre + str(np.round(order, 1))
-        elif type(order) in (np.ndarray, list, tuple):
-            return ['SB' + str(np.round(o, 1)) for o in order]
 
 
     def _phase_axis(self, unit='n'):
@@ -816,7 +800,6 @@ class RABBITT_scan():
     #TODO1: port set_energy_limit and proper handover of preset limit from vmi?
     #TODO2: port _phase_axis, _energy_axis and related stuff!
     #TODO3: is this description complete? the one for VMI class should be already!
-    #TODO4: example code is probably broken now
     #TODO5: the class needs a bit more documentation
     #TODO6: make import of saved inverted spectra possible
     #TODO7: it would be nice if new selection of angles does not need new abel inversion
@@ -834,6 +817,7 @@ class RABBITT_scan():
     # Global options
     min_energy: float = 0                                   # lower energy limit for plotting
     max_energy: float = 19                                  # upper energy limit for plotting
+    name: str = ''                                          # name for some plots etc
     
     HH_oscillation: np.ndarray | None = None                # signal oscillation averaged over each HH
     SB_oscillation: np.ndarray | None = None                # signal oscillation averaged over each SB
@@ -911,13 +895,32 @@ class RABBITT_scan():
             self.speed_distributions, self.speed_distribution = \
                 self.vmi.speed_distributions, self.vmi.speed_distribution
             self.theta_range = self.vmi.theta_range
+            
+        theta_range_deg = np.astype(np.round(np.array(self.theta_range)*180/np.pi), int)
+        self.name = self._prefix() + '' + str(theta_range_deg[0]) + '°-' + str(theta_range_deg[1]) + '°'
         
         self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
         
         self.harmonics, self.sidebands = self.vmi.harmonics, self.vmi.sidebands
         self.n_harmonics, self.n_sidebands = self.vmi.n_harmonics, self.vmi.n_sidebands
+    
+    
+    def _prefix(self):
+        '''changes the name like "name: " to create separate plots for each intance of the class'''
+        if self.name is None or self.name == '':
+            return ''
+        else:
+            return str(self.name) + ': '
         
+      
+    def _legend_name(self, order, pre='SB'):
+        '''returns names as 'SB14' for plot legends'''
+        if type(order) in (int, float, np.float64):
+            return pre + str(np.round(order, 1))
+        elif type(order) in (np.ndarray, list, tuple):
+            return ['SB' + str(np.round(o, 1)) for o in order]
+
 
     
     def plot_oscillation(self, oscillation, labels=None, popts=None, fig_number=None, 
@@ -1003,7 +1006,10 @@ class RABBITT_scan():
         im.set_data(x_axis, y_axis, data_2D.T)
         ax.add_image(im)
         ax.set_xlim(x_axis[0], x_axis[-1])
-        ax.set_ylim(self.min_energy, self.max_energy)
+        if x_axis is self.vmi.energies:
+            ax.set_ylim(self.min_energy, self.max_energy)
+        else:
+            ax.set_ylim(y_axis[0], y_axis[-1])
         ima = matplotlib.image.AxesImage(ax)
         if clim is None:
             ima.set_clim(np.min(data_2D), np.max(data_2D))
@@ -1447,22 +1453,24 @@ class RABBITT_scan():
 
 if __name__ == "__main__":
 
-    hasi = RABBITT_scan('Ar')                      # initialize scan object
+    hasi = VMI_scan('Ar')                          # initialize VMI scan object
     hasi.read_scan_files()                         # read .h5 measurement data 
     hasi.perform_abel_inversion(theta=(0, np.pi))  # abel invert, integrate upper image half
     
-#%%%
     hasi.energy_scale()                            # calibrate energy axis 
-    hasi.phase_scale(100, 'mrad')                  # apply phase axis
+    hasi.phase_scale(150, 'mrad')                  # apply phase axis
     
-    hasi.plot_RABBITT_trace(hasi.speed_distributions, delay_unit='fs', energy_unit='v')
-    hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
+#%%%
+    hase = RABBITT_scan(hasi)                      # initiallize RABBITT scan object
     
-    hasi.do_cosine_fit(plotting=False)             # cosine-fit for every energy
-    hasi.select_sideband_ranges(dist=10)           # select sb integration ranges
+    hase.plot_RABBITT_trace(hase.speed_distributions, delay_unit='fs', energy_unit='v')
+    hase.plot_RABBITT_trace(hase.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
     
-    legend_names = [hasi._legend_name(n_SB) for n_SB in hasi.n_sidebands]
-    hasi.plot_oscillation(hasi.SB_oscillation, legend_names, hasi._prefix() + 'Sideband Oscillation')    
+    hase.do_cosine_fit(plotting=False)             # cosine-fit for every energy
+    hase.select_sideband_ranges(dist=10)           # select sb integration ranges
+    
+    legend_names = [hase._legend_name(n_SB) for n_SB in hase.n_sidebands]
+    hase.plot_oscillation(hase.SB_oscillation, legend_names, hase.cos_fit_popts, hase._prefix() + 'Sideband Oscillation')    
         
 
     
