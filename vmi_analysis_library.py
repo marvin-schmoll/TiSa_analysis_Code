@@ -567,7 +567,7 @@ class RABBITT_scan():
     
         
     
-    def energy_scale(self, max_pixel=550, peak_distance=2/3,
+    def energy_scale(self, min_pixel=0, max_pixel=550, peak_distance=2/3,
                      height=0.1, prominence=0.1, width=5):
         """
         Performs curve fit to determine energy axis.
@@ -577,7 +577,11 @@ class RABBITT_scan():
         Parameters
         ----------
         max_pixel : int, optional
-            Pixel up to which peaks can will be recognized as harmonics/sidebands. 
+            Pixel starting from which peaks will be recognized as harmonics/sidebands. 
+            The default is 0, i.e. from the beginning.
+
+        max_pixel : int, optional
+            Pixel up to which peaks will be recognized as harmonics/sidebands. 
             The default is 550.
             
         peak_distance : int or float, optional
@@ -617,9 +621,10 @@ class RABBITT_scan():
         def velocity(n, a, b):   # n, b in [harm. orders]; a in [samples^2/harm. order]
             return np.sqrt(a * (n+b))   # output in [samples]
         
-        peaks, properties = scipy.signal.find_peaks(self.speed_distribution[0:max_pixel], 
+        peaks, properties = scipy.signal.find_peaks(self.speed_distribution[min_pixel:max_pixel], 
                                                     height=height, prominence=prominence,
                                                     width=width)
+        peaks = peaks + min_pixel
         
         plt.figure(num='Speed distribution', clear=True)
         plt.plot(self.speed_distribution)
