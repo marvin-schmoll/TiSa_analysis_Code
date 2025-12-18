@@ -803,7 +803,7 @@ class VMI_scan():
 class RABBITT_scan():
     #TODO: below a list of what needs to be adressed before this version can be merged with main
     #TODO1: port set_energy_limit and proper handover of preset limit from vmi?
-    #TODO2: port _phase_axis, _energy_axis and related stuff!
+    #TODO2: test _phase_axis, _energy_axis!
     #TODO3: is this description complete? the one for VMI class should be already!
     #TODO5: the class needs a bit more documentation
     #TODO6: make import of saved inverted spectra possible
@@ -888,10 +888,15 @@ class RABBITT_scan():
         """Internal helper to extract a RABBITT trace from a VMI_Scan."""
         
         self.nsteps = self.vmi.nsteps
+        self.types = self.vmi.types
+        self.scan_type = self.vmi.scan_type
         
         self.times = self.vmi.times
+        self.angles = self.vmi.angles
+        self.distances = self.vmi.distances
         self.speed_axis = self.vmi.speed_axis
         self.energies = self.vmi.energies
+        self.velocity_axis = self.vmi.velocity_axis
         
         if self.theta_range is not None:   # abel invert for given angles
             self.speed_distributions, self.speed_distribution = \
@@ -909,6 +914,21 @@ class RABBITT_scan():
         
         self.harmonics, self.sidebands = self.vmi.harmonics, self.vmi.sidebands
         self.n_harmonics, self.n_sidebands = self.vmi.n_harmonics, self.vmi.n_sidebands
+
+
+    def _phase_axis(self, unit='n'):
+        if self.VMI is not None:
+            return self.vmi._phase_axis(unit)
+        else:
+            return self.times, 'delay [fs]', True
+        
+
+    def _energy_axis(self, unit='n'):
+        if self.VMI is not None:
+            return self.vmi._energy_axis(unit)
+        else:
+            return self.energies, 'energy [eV]', False
+            
     
     
     def _prefix(self):
