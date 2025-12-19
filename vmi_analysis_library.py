@@ -801,6 +801,15 @@ class VMI_scan():
     
 @dataclass
 class RABBITT_scan():
+    """
+    RABBITT scan that can either:
+    • delegate axes/metadata to a VMI_scan (read-only, always in sync), or
+    • own its data when constructed from explicit arrays or other sources.
+    
+    
+    Public attributes (times, energies, etc.) form a stable API independent
+    of the data source.
+    """
     #TODO: below a list of what needs to be adressed before this version can be merged with main
     #TODO1: port set_energy_limit and proper handover of preset limit from vmi?
     #TODO2: test _phase_axis, _energy_axis!
@@ -816,8 +825,10 @@ class RABBITT_scan():
 
     # Option B — direct data input
     data: Optional[np.ndarray] = None
-    times: Optional[np.ndarray] = None
-    energies: Optional[np.ndarray] = None
+    
+    # private backing storage for owned data
+    _times: Optional[np.ndarray] = field(default=None, repr=False)
+    _energies: Optional[np.ndarray] = field(default=None, repr=False)
     
     # Global options
     min_energy: float = 0                                   # lower energy limit for plotting
@@ -876,6 +887,12 @@ class RABBITT_scan():
         elif self.data is not None:
             if self.times is None or self.energies is None:
                 raise ValueError("Must provide times and energies with data.")
+            # transfer ownership
+            self._times = self.times
+            self._energies = self.energies
+            # remove public copies
+            self.times = None
+            self.energies = None    
             raise NotImplementedError("It is planned but not yet tested to read data not from VMI")
             # TODO: recalculate everything else needed?
             return
@@ -884,19 +901,78 @@ class RABBITT_scan():
         raise ValueError("RABBITT_scan must be given either vmi or data + times + energies.")
 
 
+    # ──────────────────────────────────────────────────────────────────
+    # Delegating / owned axes (public API)
+    # ──────────────────────────────────────────────────────────────────
+    
+    @property
+    def times(self) -> np.ndarray:
+        if self.vmi is not None:
+            return self.vmi.times
+        if self._times is None:
+            raise AttributeError("times not initialized")
+        return self._times
+    
+    @times.setter
+    def times(self, value: np.ndarray):
+        if self.vmi is not None:
+            raise AttributeError("times is read-only when sourced from VMI")
+        self._times = value
+    
+    @property
+    def angles(self) -> np.ndarray:
+        if self.vmi is not None:
+            return self.vmi.angles
+        raise AttributeError("angles is only available when sourced from VMI")
+    
+    @property
+    def distances(self) -> np.ndarray:
+        if self.vmi is not None:
+            return self.vmi.distances
+        raise AttributeError("distances is only available when sourced from VMI")
+    
+    @property
+    def energies(self) -> np.ndarray:
+        if self.vmi is not None:
+            return self.vmi.energies
+        if self._energies is None:
+            raise AttributeError("energies not initialized")
+        return self._energies
+    
+    @energies.setter
+    def energies(self, value: np.ndarray):
+        if self.vmi is not None:
+            raise AttributeError("energies is read-only when sourced from VMI")
+        self._energies = value
+    
+    @property
+    def speed_axis(self) -> np.ndarray:
+        if self.vmi is not None:
+            return self.vmi.speed_axis
+        raise AttributeError("speed_axis is only available when sourced from VMI")
+    
+    @property
+    def velocity_axis(self) -> np.ndarray:
+        if self.vmi is not None:
+            return self.vmi.velocity_axis
+        raise AttributeError("velocity_axis is only available when sourced from VMI")
+    
+    # metadata passthroughs
+    @property
+    def nsteps(self):
+        return self.vmi.nsteps if self.vmi is not None else None
+
+    @property
+    def types(self):
+        return self.vmi.types if self.vmi is not None else None
+
+    @property
+    def scan_type(self):
+        return self.vmi.scan_type if self.vmi is not None else None
+    
+
     def _build_from_vmi(self):
         """Internal helper to extract a RABBITT trace from a VMI_Scan."""
-        
-        self.nsteps = self.vmi.nsteps
-        self.types = self.vmi.types
-        self.scan_type = self.vmi.scan_type
-        
-        self.times = self.vmi.times
-        self.angles = self.vmi.angles
-        self.distances = self.vmi.distances
-        self.speed_axis = self.vmi.speed_axis
-        self.energies = self.vmi.energies
-        self.velocity_axis = self.vmi.velocity_axis
         
         if self.theta_range is not None:   # abel invert for given angles
             self.speed_distributions, self.speed_distribution = \
@@ -917,14 +993,16 @@ class RABBITT_scan():
 
 
     def _phase_axis(self, unit='n'):
-        if self.VMI is not None:
+        """calls VMI function if built from VMI and defaults to times otherwise"""
+        if self.vmi is not None:
             return self.vmi._phase_axis(unit)
         else:
             return self.times, 'delay [fs]', True
         
 
     def _energy_axis(self, unit='n'):
-        if self.VMI is not None:
+        """calls VMI function if built from VMI and defaults to energies otherwise"""
+        if self.vmi is not None:
             return self.vmi._energy_axis(unit)
         else:
             return self.energies, 'energy [eV]', False
@@ -954,7 +1032,7 @@ class RABBITT_scan():
             each having a seperate axis indicating their relative intensity
             if only one is given, the function also works'''
     
-        x_axis, x_label, x_linarity = self.vmi._phase_axis(delay_unit)
+        x_axis, x_label, x_linarity = self._phase_axis(delay_unit)
         plt.figure(num=fig_number, clear=True, figsize=(size_hor, size_ver))
         scaling = 1e3  # to stretch all to make numbers with less decimals
         
@@ -1022,8 +1100,8 @@ class RABBITT_scan():
         '''plots the RABBITT-trace as colormap;
             no interpolation between datapoints is used to show the real resolution'''
 
-        x_axis, x_label, _ = self.vmi._phase_axis(delay_unit)
-        y_axis, y_label, _ = self.vmi._energy_axis(energy_unit)
+        x_axis, x_label, _ = self._phase_axis(delay_unit)
+        y_axis, y_label, _ = self._energy_axis(energy_unit)
         _, ax = plt.subplots(num=fig_number, clear=True, figsize=figsize)
 
         # works with nonuniform x-axis
@@ -1031,7 +1109,7 @@ class RABBITT_scan():
         im.set_data(x_axis, y_axis, data_2D.T)
         ax.add_image(im)
         ax.set_xlim(x_axis[0], x_axis[-1])
-        if x_axis is self.vmi.energies:
+        if x_axis is self.energies:
             ax.set_ylim(self.min_energy, self.max_energy)
         else:
             ax.set_ylim(y_axis[0], y_axis[-1])
