@@ -149,7 +149,7 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
     dt = T[0, 1] - T[0, 0]  # get the actual number, if dt=None was passed
     mask = np.logical_and(theta_low < T, T < theta_high)
     intensity = polarIM.sum(axis=1, where=mask) * dt
-
+    
     return R[:, 0], intensity
 
 
@@ -166,6 +166,7 @@ class VMI_scan():
     inverted_scan: np.ndarray | None = None                 # collection of 2D images after Abel inversion
     nsteps: int | None = None                               # number of delay steps
     theta_range: Tuple[float, float] | None = None          # angle range for abel inversion
+    origin: Tuple[int, int] = default_origin                # center of the VMI image in pixels
     
     # --- Speed distributions ---
     speed_distributions: np.ndarray | None = None           # speed distributions obtained from angular integration of inverted images
@@ -433,7 +434,7 @@ class VMI_scan():
 
 
 
-    def perform_abel_inversion(self, origin=default_origin, theta=(-np.pi,+np.pi), 
+    def perform_abel_inversion(self, origin=None, theta=(-np.pi,+np.pi), 
                                order=6, odd_orders=True, save_internal=True):
         """
         Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
@@ -443,7 +444,9 @@ class VMI_scan():
         Parameters
         ----------
         origin : 2-tuple of int, optional
-            Image center in pixels. The default can be set globally.
+            Image center in pixels. The default is None, which falls back to 
+            the origin saved in the dataclass, specifying origin here will 
+            also overwrite this.
             
         theta : 2-tuple of float
             Angle range for the integration (radians).
@@ -460,10 +463,11 @@ class VMI_scan():
         
         save_internal : bool
             By default (True), the abel inversion results are written to class
-            variables. For direct use this is almost always the inteded option.
+            variables. For direct use this is almost always the intended option.
             If set to False, the results will only be returned and a possibly
-            existing inversion will not be overwritten. This is for use with
-            the RABBITT class.
+            existing inversion will not be overwritten.
+            This option is deprecated as no longer needed in RABBITT class and
+            may be removed soon.
 
         Returns
         -------
@@ -479,6 +483,9 @@ class VMI_scan():
             message = "No scan loaded to perform Abel inversion on."
             raise AttributeError(message)
         
+        if origin is None:
+            origin = self.origin
+        
         inverted_scan = np.zeros((self.nsteps,1920,1200))
         speed_distributions = np.zeros((self.nsteps,600))
         
@@ -493,6 +500,7 @@ class VMI_scan():
             speed_distribution = normalized(speed_distributions.sum(axis=0))
         
         if save_internal:
+            self.origin = origin
             self.theta_range = theta
             self.inverted_scan = inverted_scan
             self.speed_distributions = speed_distributions
@@ -816,12 +824,10 @@ class RABBITT_scan():
     #TODO3: is this description complete? the one for VMI class should be already!
     #TODO5: the class needs a bit more documentation
     #TODO6: make import of saved inverted spectra possible
-    #TODO7: it would be nice if new selection of angles does not need new abel inversion
     
     # Option A — VMI input
     vmi: Optional["VMI_scan"] = None
     theta_range: Optional[Tuple[float, float]] = None
-    origin: Tuple[float, float] = default_origin
 
     # Option B — direct data input
     data: Optional[np.ndarray] = None
@@ -961,6 +967,10 @@ class RABBITT_scan():
     @property
     def nsteps(self):
         return self.vmi.nsteps if self.vmi is not None else None
+    
+    @property
+    def origin(self):
+        return self.vmi.origin if self.vmi is not None else None
 
     @property
     def types(self):
@@ -974,10 +984,20 @@ class RABBITT_scan():
     def _build_from_vmi(self):
         """Internal helper to extract a RABBITT trace from a VMI_Scan."""
         
-        if self.theta_range is not None:   # abel invert for given angles
-            self.speed_distributions, self.speed_distribution = \
-                self.vmi.perform_abel_inversion(origin=self.origin, theta=self.theta_range, save_internal=False)
-        else:   # use angles and inversion from VMI class to save processor time
+        if self.theta_range is not None:   # do angular integration here
+            if self.vmi.inverted_scan is None:
+                raise AttributeError("Must have already performed Abel inversion.")
+            inverted_scan = self.vmi.inverted_scan
+
+            speed_distributions = np.zeros((self.nsteps,600))
+            for i, VMI_image in tqdm(enumerate(inverted_scan), total=self.nsteps):
+                speeds = vmi_radial_intensity('int3D', inverted_scan[i], origin=self.origin,
+                                              theta_low=self.theta_range[0], theta_high=self.theta_range[1])
+                speed_distributions[i] = speeds[1][:600]
+            self.speed_distributions = speed_distributions
+            self.speed_distribution = normalized(speed_distributions.sum(axis=0))
+                
+        else:   # use angles and integation from VMI class to save processor time
             self.speed_distributions, self.speed_distribution = \
                 self.vmi.speed_distributions, self.vmi.speed_distribution
             self.theta_range = self.vmi.theta_range
