@@ -25,27 +25,27 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 from enum import Enum
 
-import abel
+import abel  #PyAbel library → used for Abel inversion (recover 3D distribution from 2D projection)
 
 import tkinter as tk
 from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
-from tqdm import tqdm
+from tqdm import tqdm  #progress bar in loops
 
-import utility_library as util
-from utility_library import normalized
+import utility_library as util  #smoothing, selecting ranges, finding FWHM, colors, etc.
+from utility_library import normalized    #used everywhere (normalize signals)
 
 
 c = 2.99792458 * 10**8  # velocity of light [m/s]
 h = 4.135667696         # planck constant [eV*fs]
 omega_IR = 2.35         # [rad/fs] (for 800nm)
 lambda_IR = 800e-9      # [m]
-m_e = 5.68563 * 10**-12 # electron mass [eV/(m/s)^2]
+m_e = 5.68563 * 10**-12 # electron mass [eV/(m/s)^2]  used for converting kinetic energy to velocity
 
 CEP_factor = 9.6406e-4  # calibration factor wedge distance to CEP distance
 
-E_IR = h / (2*np.pi) * omega_IR   # [eV]
+E_IR = h / (2*np.pi) * omega_IR   # [eV]  Photon energy (eV) from angular frequency E=ℏω =(h/2π)​ω
 
-default_origin = (967, 607)  # Change (!) here if VMI camera was moved
+default_origin = (971, 611)  # Change (!) here if VMI camera was moved i.e (967, 607)
 
 
 def plot_VMI_image(image, cmap='viridis', saving=False, 
@@ -53,7 +53,7 @@ def plot_VMI_image(image, cmap='viridis', saving=False,
     '''plots a single VMI image'''
     
     if logscale:
-        image = np.where(image < 0.1, np.ones_like(image)*0.1, image)
+        image = np.where(image < 0.1, np.ones_like(image)*0.1, image) # The np.where line prevents problems from zeros / negatives (because log(0) goes to infinity
         plt.matshow(image, norm=LogNorm(), cmap=cmap)
     else:
         plt.matshow(image, cmap=cmap)
@@ -68,10 +68,10 @@ def plot_VMI_image(image, cmap='viridis', saving=False,
         plt.savefig('vmi_image.png', dpi=300)
     
     plt.show()
-
+    #exit()        # stops the script here
 
 def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None, 
-                         theta_low=-np.pi, theta_high=np.pi):
+                         theta_low=-np.pi, theta_high=np.pi):                 #This makes a 1D spectrum from a 2D VMI image by integrating over angles
     """
     Calculate the one-dimensional radial intensity profile by angular
     integration or averaging of the image, treated either as a two-dimensional
@@ -132,11 +132,13 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
     This is a clone of the abel.tools.vmi.radial_intensity function from thy 
     PyAbel library with added capability to only integrate a slice of the image
     """
-    polarIM, R, T = abel.tools.polar.reproject_image_into_polar(IM, origin, dr=dr, dt=dt)
-    # apply necessary Jacobian/normalization
-    if kind == 'int2D':
+    polarIM, R, T = abel.tools.polar.reproject_image_into_polar(IM, origin, dr=dr, dt=dt)     #Convert cartesian → polar
+                                                                                              #Takes image IM(x,y) → Converts to polar grid, polarIM(r,θ)
+    
+    # apply necessary Jacobian/normalization                                       
+    if kind == 'int2D':        #2D distribution: multiply by R 
         polarIM *= R
-    elif kind == 'int3D':
+    elif kind == 'int3D':      #3D distribution: multiply by 𝜋𝑅^2∣sin𝜃∣       
         polarIM *= np.pi * R**2 * np.abs(np.sin(T))
     elif kind == 'avg2D':
         polarIM /= 2 * np.pi
@@ -146,14 +148,14 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
         raise ValueError('Incorrect kind={}'.format(kind))
 
     # integrate over theta
-    dt = T[0, 1] - T[0, 0]  # get the actual number, if dt=None was passed
-    mask = np.logical_and(theta_low < T, T < theta_high)
-    intensity = polarIM.sum(axis=1, where=mask) * dt
+    dt = T[0, 1] - T[0, 0]  # get the actual number, if dt=None was passed (Calculates angular step size dt)
+    mask = np.logical_and(theta_low < T, T < theta_high)  #sum(axis=1) integrates along the theta direction → produces a 1D function of r
+    intensity = polarIM.sum(axis=1, where=mask) * dt  #multiply by dt → turns the sum into a real integral
     
-    return R[:, 0], intensity
+    return R[:, 0], intensity   #radial intensity vs radius
 
 
-@dataclass
+@dataclass                                                #A dataclass storing all VMI scan data + results.
 class VMI_scan():
     '''class to manage VMI acquisitions'''
     
@@ -1594,8 +1596,4 @@ if __name__ == "__main__":
     
     legend_names = [hase._legend_name(n_SB) for n_SB in hase.n_sidebands]
     hase.plot_oscillation(hase.SB_oscillation, legend_names, hase.cos_fit_popts, hase._prefix() + 'Sideband Oscillation')    
-        
-
     
-        
-        
