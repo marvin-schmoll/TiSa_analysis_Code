@@ -679,13 +679,25 @@ class VMI_scan():
         
         if path.split(".")[-1] == "h5": # Save as h5 dataset
             with h5py.File(path, "w") as f:
-                f.create_dataset("speed_axis", data=self.speed_axis)
-                f.create_dataset("energy_axis", data=self.energies)
-                f.create_dataset("velocity_axis", data=self.velocity_axis)
-                f.create_dataset("harmonic_locations", data=self.harmonics)
-                f.create_dataset("harmonic_orders", data=self.n_harmonics)
-                f.create_dataset("sideband_locations", data=self.sidebands)
-                f.create_dataset("sideband_orders", data=self.n_sidebands)
+                f.create_dataset("speed_axis", data=self.speed_axis).attrs.update({
+                                    "description": "Radial position in abel inverted image",
+                                    "unit": "pixels"})
+                f.create_dataset("energy_axis", data=self.energies).attrs.update({
+                                    "description": "Photoelectron energies",
+                                    "unit": "eV"})
+                f.create_dataset("velocity_axis", data=self.velocity_axis).attrs.update({
+                                    "description": "Photoelectron velocities",
+                                    "unit": "m/s"})
+                f.create_dataset("harmonic_locations", data=self.harmonics).attrs.update({
+                                    "description": "Position of harmonic peaks",
+                                    "units": "pixels"})
+                f.create_dataset("harmonic_orders", data=self.n_harmonics).attrs.update({
+                                    "description": "Order of harmonic peaks"})
+                f.create_dataset("sideband_locations", data=self.sidebands).attrs.update({
+                                    "description": "Position of sideband peaks",
+                                    "units": "pixels"})
+                f.create_dataset("sideband_orders", data=self.n_sidebands).attrs.update({
+                                    "description": "Order of sideband peaks"})
     
     def read_energy_scale(self, file=None):
         '''Reads h5 files containing the energy calibration'''
@@ -1155,7 +1167,8 @@ class RABBITT_scan():
 
 
 
-    def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None):
+    def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None, 
+                         normalize=True, use_diff=True):
         '''
         Normalizes data in a way that is useful for the RABBITT-analysis
         and extracts the integrals of sidband and harmonic signal.
@@ -1176,6 +1189,15 @@ class RABBITT_scan():
             this can be specified to smooth the data along the time axis.
             The integer will specify the size of the smoothing kernel.
             The default is None, which deactivates smoothing along this axis.
+            
+        normalize: bool, optional
+            Whether to artificially set all delays to the same total intensity.
+            The default is true.
+            
+        use_diff: bool, optional
+            Whether to subtract the average photoelectron spectrum for a
+            count difference.
+            The default is true.
 
         Returns
         -------
@@ -1186,7 +1208,10 @@ class RABBITT_scan():
         self.speed_distribution_norm = normalized(self.speed_distribution_jacobi, 'sum')
         
         # Normalize signal for each delay step
-        self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
+        if normalize:
+            self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
+        else:
+            self.data_norm = self.speed_distributions_jacobi
         
         # Smooth data if specified
         if (smoothE is None) or (smoothE == 0):
@@ -1197,8 +1222,11 @@ class RABBITT_scan():
             self.data_smooth = util.smooth_2D(self.data_norm, smoothT, smoothE)
         
         # Calculate changes from average signal
-        self.data_diff = self.data_smooth - normalized(np.nansum(self.data_smooth, axis=0), 'sum')
-        
+        if use_diff:
+            self.data_diff = self.data_smooth - np.nansum(self.data_smooth, axis=0)/self.nsteps
+        else:
+            self.data_diff = self.data_smooth
+           
         self.left  = self.sidebands - integral_width
         self.right = self.sidebands + integral_width+1
         
