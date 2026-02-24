@@ -53,7 +53,7 @@ def plot_VMI_image(image, cmap='viridis', saving=False,
     '''plots a single VMI image'''
     
     if logscale:
-        image = np.where(image < 0.1, np.ones_like(image)*0.1, image) # The np.where line prevents problems from zeros / negatives (because log(0) goes to infinity
+        image = np.where(image < 0.1, np.ones_like(image)*0.1, image) # The np.where line prevents problems from zeros / negatives (because log(0) goes to infinity)
         plt.matshow(image, norm=LogNorm(), cmap=cmap)
     else:
         plt.matshow(image, cmap=cmap)
@@ -68,13 +68,13 @@ def plot_VMI_image(image, cmap='viridis', saving=False,
         plt.savefig('vmi_image.png', dpi=300)
     
     plt.show()
-    #exit()        # stops the script here
+
 
 def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None, 
                          theta_low=-np.pi, theta_high=np.pi):                 #This makes a 1D spectrum from a 2D VMI image by integrating over angles
     """
-    Calculate the one-dimensional radial intensity profile by angular
-    integration or averaging of the image, treated either as a two-dimensional
+    Calculate the 1D radial intensity profile by angular integration or 
+    averaging of the 2D image, treated either as a two-dimensional
     distribution or as a central slice of a cylindrically symmetric
     three-dimensional distribution.
 
@@ -129,7 +129,7 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
         
     Notes
     -----
-    This is a clone of the abel.tools.vmi.radial_intensity function from thy 
+    This is a clone of the abel.tools.vmi.radial_intensity function from the 
     PyAbel library with added capability to only integrate a slice of the image
     """
     polarIM, R, T = abel.tools.polar.reproject_image_into_polar(IM, origin, dr=dr, dt=dt)     #Convert cartesian → polar
@@ -180,8 +180,6 @@ class VMI_scan():
     speed_axis: np.ndarray | None = None                    # photoelectron spectrum axis: speed in samples
     energies: np.ndarray | None = None                      # photoelectron spectrum axis: energy in eV
     velocity_axis: np.ndarray | None = None                 # photoelectron spectrum axis: velocity in m/s
-    min_energy: float = 0                                   # lower energy limit for plotting
-    max_energy: float = 19                                  # upper energy limit for plotting
     times: np.ndarray | None = None                         # scan axis: [fs] of 800nm
     angles: np.ndarray | None = None                        # scan axis: [rad] of 800nm
     distances: np.ndarray | None = None                     # scan axis: [mm]
@@ -252,24 +250,6 @@ class VMI_scan():
     
     
     
-    def set_energy_limit(self, limit=None, left_limit=None):
-        '''allows to set an energy limit up to which structure is visible in the spectrum
-            this will be used as axis limit in all plots'''
-
-        if limit is None:
-            self.max_energy = float(np.max(self.energies))
-        else:
-            self.max_energy = float(limit)
-        assert isinstance(self.max_energy, float), "energy limit has to be float"
-
-        if left_limit is None:
-            self.min_energy = float(0)
-        else:
-            self.min_energy = float(left_limit)
-        assert isinstance(self.min_energy, float), "left energy limit has to be float"
-
-
-
     def read_scan_files(self, files=None, bfile='', use_steps=slice(None)):
         """
         Reads a selection of h5-files corresponding to a scan and averages them.
@@ -818,7 +798,24 @@ class VMI_scan():
             
             self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
             self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
-            
+    
+
+    
+    def calibrate_detector_efficiency(self, origin=default_origin):
+        
+        avg_image = self.scan.sum(axis=0)
+        dims = avg_image.shape
+        
+        i = min(origin[1], dims[1]-origin[1])
+        eff_map = avg_image[:,origin[1]-i:origin[1]] / np.flip(avg_image[:,origin[1]:origin[1]+i], axis=1)
+        
+        plt.figure(clear=True)
+        plt.imshow(eff_map.T, cmap='PiYG')
+        plt.colorbar()
+        plt.clim(0.8,1.2)
+        plt.show()
+        
+        return eff_map
     
     
 @dataclass
@@ -833,7 +830,6 @@ class RABBITT_scan():
     of the data source.
     """
     #TODO: below a list of what needs to be adressed before this version can be merged with main
-    #TODO1: port set_energy_limit and proper handover of preset limit from vmi?
     #TODO2: test _phase_axis, _energy_axis!
     #TODO3: is this description complete? the one for VMI class should be already!
     #TODO5: the class needs a bit more documentation
@@ -1060,6 +1056,24 @@ class RABBITT_scan():
 
 
     
+    def set_energy_limit(self, limit=None, left_limit=None):
+        '''allows to set an energy limit up to which structure is visible in the spectrum
+            this will be used as axis limit in all plots'''
+
+        if limit is None:
+            self.max_energy = float(np.max(self.energies))
+        else:
+            self.max_energy = float(limit)
+        assert isinstance(self.max_energy, float), "energy limit has to be float"
+
+        if left_limit is None:
+            self.min_energy = float(0)
+        else:
+            self.min_energy = float(left_limit)
+        assert isinstance(self.min_energy, float), "left energy limit has to be float"
+
+
+
     def plot_oscillation(self, oscillation, labels=None, popts=None, fig_number=None, 
                          delay_unit='fs', size_hor=10, size_ver=8, saving=False):
         '''plots multiple oscillations in seperate subplots with line coloring showing their energies,
@@ -1614,7 +1628,7 @@ if __name__ == "__main__":
     hasi.phase_scale(150, 'mrad')                  # apply phase axis
     
 #%%%
-    hase = RABBITT_scan(hasi)                      # initiallize RABBITT scan object
+    hase = RABBITT_scan(hasi)                      # initialize RABBITT scan object
     
     hase.plot_RABBITT_trace(hase.speed_distributions, delay_unit='fs', energy_unit='v')
     hase.plot_RABBITT_trace(hase.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
