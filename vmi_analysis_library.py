@@ -875,7 +875,7 @@ class RABBITT_scan():
         im.set_data(x_axis, y_axis, data_2D.T)
         ax.add_image(im)
         ax.set_xlim(x_axis[0], x_axis[-1])
-        if x_axis is self.vmi.energies:
+        if x_axis is self.energies:
             ax.set_ylim(self.min_energy, self.max_energy)
         else:
             ax.set_ylim(y_axis[0], y_axis[-1])
