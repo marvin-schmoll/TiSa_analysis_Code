@@ -25,14 +25,14 @@ from dataclasses import dataclass, field
 from typing import Optional, Tuple
 from enum import Enum
 
-import abel  #PyAbel library → used for Abel inversion (recover 3D distribution from 2D projection)
+import abel  # PyAbel library → used for Abel inversion (recover 3D distribution from 2D projection)
 
 import tkinter as tk
 from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
-from tqdm import tqdm  #progress bar in loops
+from tqdm import tqdm  # progress bar in loops
 
-import utility_library as util  #smoothing, selecting ranges, finding FWHM, colors, etc.
-from utility_library import normalized    #used everywhere (normalize signals)
+import utility_library as util  # smoothing, selecting ranges, finding FWHM, colors, etc.
+from utility_library import normalized    # used everywhere (normalize signals)
 
 
 c = 2.99792458 * 10**8  # velocity of light [m/s]
@@ -71,7 +71,7 @@ def plot_VMI_image(image, cmap='viridis', saving=False,
 
 
 def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None, 
-                         theta_low=-np.pi, theta_high=np.pi):                 #This makes a 1D spectrum from a 2D VMI image by integrating over angles
+                         theta_low=-np.pi, theta_high=np.pi):
     """
     Calculate the 1D radial intensity profile by angular integration or 
     averaging of the 2D image, treated either as a two-dimensional
@@ -155,9 +155,12 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
     return R[:, 0], intensity   #radial intensity vs radius
 
 
-@dataclass                                                #A dataclass storing all VMI scan data + results.
+@dataclass
 class VMI_scan():
-    '''class to manage VMI acquisitions'''
+    """
+    Dataclass managing VMI scan acquisition data + results.
+    For reference all data attributes of the class should be listed here.
+    """
     
     # --- Required constructor arguments ---
     gas: str                                                # gas used in the VMI
@@ -714,6 +717,8 @@ class VMI_scan():
 
         """
         
+        warnings.warn("time_scale() is deprecated and may be removed, use phase_scale() instead",
+                      DeprecationWarning, stacklevel=2)
         return self.phase_scale(step, step_unit)
 
 
@@ -801,8 +806,26 @@ class VMI_scan():
             self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
     
 
-    
+
     def calibrate_detector_efficiency(self, pixel_threshold=5000, origin=default_origin):
+        """
+        Calculates signal difference between top and bottom half of the image.
+        TODO: this method is still in development
+
+        Parameters
+        ----------
+        origin : 2-tuple of int, optional
+            Image center in pixels. The default can be set globally.
+        pixel_threshold : int or float
+            Minimal signal per pixel for a correction to be calculated.
+            For pixels below threshold the factor will be set to 1.
+
+        Returns
+        -------
+        eff_map : np.array
+            Map which can be applied to correct for detector efficiency.
+
+        """
         
         avg_image = self.scan.sum(axis=0)
         dims = avg_image.shape
@@ -836,9 +859,8 @@ class RABBITT_scan():
     of the data source.
     """
     #TODO: below a list of what needs to be adressed before this version can be merged with main
-    #TODO2: test _phase_axis, _energy_axis!
+    #TODO2: simplify _phase_axis, _energy_axis!
     #TODO3: is this description complete? the one for VMI class should be already!
-    #TODO5: the class needs a bit more documentation
     #TODO6: make import of saved inverted spectra possible
     
     # Option A — VMI input
@@ -924,8 +946,11 @@ class RABBITT_scan():
 
 
     # ──────────────────────────────────────────────────────────────────
-    # Delegating / owned axes (public API)
+    # ####### Delegating / owned axes (public API) #######
     # ──────────────────────────────────────────────────────────────────
+    # sources the respective arrays as read_only from the vmi class if one exists
+    # otherwise either delegates to private attributes which can be modified
+    # or throws an error in case those don't exist
     
     @property
     def times(self) -> np.ndarray:
@@ -1029,19 +1054,25 @@ class RABBITT_scan():
 
 
     def _phase_axis(self, unit='n'):
-        """calls VMI function if built from VMI and defaults to times otherwise"""
+        """calls VMI function if built from VMI,
+            otherwise outputs times if specified or defaults to steps"""
         if self.vmi is not None:
             return self.vmi._phase_axis(unit)
-        else:
+        elif unit.lower in {'s', 'fs', 'as', 'second', 'seconds', 'time', 'times', 't', 'delay'}:
             return self.times, 'delay [fs]', True
+        else:
+            return np.arange(len(self.times)), 'steps', True
         
 
     def _energy_axis(self, unit='n'):
-        """calls VMI function if built from VMI and defaults to energies otherwise"""
+        """calls VMI function if built from VMI,
+            otherwise outputs energies if specified or defaults to steps"""
         if self.vmi is not None:
             return self.vmi._energy_axis(unit)
-        else:
+        elif unit.lower() in {'e', 'energy', 'ev', 'j'}:
             return self.energies, 'energy [eV]', False
+        else:
+            return np.arange(len(self.energies)), 'steps', True
             
     
     
@@ -1151,8 +1182,41 @@ class RABBITT_scan():
     
     def plot_RABBITT_trace(self, data_2D, fig_number=None, clabel='counts', cmap='jet', 
                            delay_unit='n', energy_unit='n', clim=None, saving=False, figsize=None):
-        '''plots the RABBITT-trace as colormap;
-            no interpolation between datapoints is used to show the real resolution'''
+        """
+        Plots the RABBITT-trace as colormap.
+
+        Parameters
+        ----------
+        data_2D : 2D np.array
+            RABBITT scan to plot.
+        fig_number : int or str, optional
+            matplotlib fig_number. The default is None.
+        clabel : str, optional
+            Label for the colorbar. The default is 'counts'.
+        cmap : str, optional
+            Colormap. The default is 'jet'.
+        delay_unit : str, optional
+            Unit for the delay axis. The default is 'n', i.e. steps.
+        energy_unit : str, optional
+            Unit for the energy axis. The default is 'n', i.e. steps.
+        clim : 2-tuple or None, optional
+            Limits for the color scale. 
+            The default is None, which uses the range of values in data_2D.
+        saving : bool or str, optional
+            If true or a file format (pdf, png, svg) is specified saves the image
+            in that file format. True uses pdf format. The default is False.
+        figsize : 2-tuple or None, optional
+            matplotlib figsize. The default is None.
+
+        Returns
+        -------
+        None.
+        
+        Notes
+        -----
+        No interpolation between datapointsis used to show the real resolution.
+
+        """
 
         x_axis, x_label, _ = self._phase_axis(delay_unit)
         y_axis, y_label, _ = self._energy_axis(energy_unit)
@@ -1180,7 +1244,9 @@ class RABBITT_scan():
         
         if saving is True or saving == "pdf":
             plt.savefig('trace.pdf')
-        elif  saving == "png":
+        elif saving == "svg":
+            plt.savefig('trace.svg')
+        elif saving == "png":
             plt.savefig('trace.png', dpi=300)
         
         plt.show()     
