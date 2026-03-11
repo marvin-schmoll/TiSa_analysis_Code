@@ -473,7 +473,8 @@ class VMI_scan():
         
         for i, VMI_image in tqdm(enumerate(self.scan), total=self.nsteps):
             recon = abel.rbasex.rbasex_transform(self.scan[i].T, origin=origin[::-1], 
-                                                     order=order, odd=odd_orders)
+                                                     order=order, odd=odd_orders,
+                                                     basis_dir='')
             inverted_scan[i] = recon[0].T
         
             speeds = vmi_radial_intensity('int3D', inverted_scan[i], origin=origin,
@@ -801,13 +802,18 @@ class VMI_scan():
     
 
     
-    def calibrate_detector_efficiency(self, origin=default_origin):
+    def calibrate_detector_efficiency(self, pixel_threshold=5000, origin=default_origin):
         
         avg_image = self.scan.sum(axis=0)
         dims = avg_image.shape
         
         i = min(origin[1], dims[1]-origin[1])
-        eff_map = avg_image[:,origin[1]-i:origin[1]] / np.flip(avg_image[:,origin[1]:origin[1]+i], axis=1)
+        half1 = avg_image[:,origin[1]-i:origin[1]]
+        half2 = np.flip(avg_image[:,origin[1]:origin[1]+i], axis=1)
+        
+        signal_map = np.minimum(half1, half2)
+        ratio_map = half1 / half2
+        eff_map = np.where(signal_map>pixel_threshold, ratio_map, 1)
         
         plt.figure(clear=True)
         plt.imshow(eff_map.T, cmap='PiYG')
