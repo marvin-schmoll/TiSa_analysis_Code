@@ -48,6 +48,14 @@ E_IR = h / (2*np.pi) * omega_IR   # [eV]  Photon energy (eV) from angular freque
 default_origin = (971, 611)  # Change (!) here if VMI camera was moved i.e (967, 607)
 
 
+def cos_lin_bg(t, phi, a, b): # fittable cosine with linear background
+    return a * np.cos(2*omega_IR * t - phi) + b * t
+
+def miguel_multi_sin(t, phi3, c3, phi6, c6, phi9, c9, c0):
+    return c0 + c3*np.sin(2*omega_IR*t - phi3) + c6*np.sin(4*omega_IR*t - phi6) + c9*np.sin(6*omega_IR*t - phi9)
+
+
+
 def plot_VMI_image(image, cmap='viridis', saving=False, 
                    lower_clim=None, upper_clim=None, logscale=False):
     '''plots a single VMI image'''
@@ -1123,8 +1131,6 @@ class RABBITT_scan():
         
         if popts is not None:
             fit_x_axis = np.linspace(x_axis[0], x_axis[-1], 1000)
-            def cos(t, omega, phi, a, b): # fittable cosine with linear background
-                return a * np.cos(omega*omega_IR * t - phi) + b * t
     
         # plot multiple oscillations in one figure
         if len(np.shape(oscillation)) == 2:
@@ -1139,7 +1145,7 @@ class RABBITT_scan():
                     pl, = ax0.plot(x_axis, oscillation[n_subfigs-1-i]*scaling, 'x-', 
                                    lw=0.8, ms=6, color=colors[n_subfigs-1-i])
                     if popts is not None:
-                        pl, = ax0.plot(fit_x_axis, cos(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
+                        pl, = ax0.plot(fit_x_axis, cos_lin_bg(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
                                         lw=0.6, color=darker_colors[n_subfigs-1-i])
                     axl=ax0
                 else:
@@ -1148,7 +1154,7 @@ class RABBITT_scan():
                     pl, = axi.plot(x_axis, oscillation[n_subfigs-1-i]*scaling, 'x-', 
                                    lw=0.8, ms=6, color=colors[n_subfigs-1-i])
                     if popts is not None:
-                        pl, = axi.plot(fit_x_axis, cos(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
+                        pl, = axi.plot(fit_x_axis, cos_lin_bg(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
                                         lw=0.6, color=darker_colors[n_subfigs-1-i])
     
                     yticks = axi.yaxis.get_major_ticks()
@@ -1462,7 +1468,7 @@ class RABBITT_scan():
         return self.phase_by_energy
 
 
-    def do_cosine_fit(self, plotting=True, omega=2, average=0):
+    def do_cosine_fit(self, plotting=True, fit_function=cos_lin_bg, average=0):
         """
         Does a cosine fit for each energy bin 
         and extracts the phase of the oscillating component
@@ -1471,10 +1477,10 @@ class RABBITT_scan():
         ----------
         plotting : bool, optional
             Whether to directly plot the result. The default is True.
-        omega : int or float, optional
-            The frequency of the angular component to be fitted in units of omega_IR.
-            The default is 2, which captures RABBITT with harmonics spaced 2*E_IR.
-            Use 1 for harmonics spaced 1*E_IR or the Ti:Sa CEP scan.
+        function : function, optional
+            The function to fit. First argument must be time parameter.
+            Second argument should be phase of interest, third its amplitude.
+            Default is a 2omega cosine with linear background.
         average : int, optional
             Specify >0 to average neighboring pixels when fitting for less noisy fits.
             The default is 0, meaning no averaging.
@@ -1496,9 +1502,6 @@ class RABBITT_scan():
         self.depth_by_energy_error = np.array([])
         self.slope_by_energy_error = np.array([])
         
-        def cos(t, phi, a, b): # fittable cosine with linear background
-            return a * np.cos(omega*omega_IR * t - phi) + b * t
-
         for i in range(len(self.data_diff.T)):
             if average == 0:
                 single_line = self.data_diff.T[i]
@@ -1507,7 +1510,7 @@ class RABBITT_scan():
             
             try:
                 ### perform cosine fit ###
-                popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
+                popt, pcov = scipy.optimize.curve_fit(fit_function, self.times, single_line)
                 perr = np.sqrt(np.diag(pcov))
                 print(popt)
     
@@ -1612,7 +1615,7 @@ class RABBITT_scan():
 
 
 
-    def phases_cosine(self, oscillation=None, labels=None, omega=2):
+    def phases_fit(self, oscillation=None, labels=None, fit_function=cos_lin_bg):
         """
         Fit the phases of sidebands (or harmonics) alredy integrated over a region.
     
@@ -1626,10 +1629,10 @@ class RABBITT_scan():
         labels : list of str, optional
             Labels for the plots representing the fits. 
             Per default or for None, sideband labels are generated and used.
-        omega : int or float, optional
-            The frequency of the angular component to be fitted in units of omega_IR.
-            The default is 2, which captures RABBITT with harmonics spaced 2*E_IR.
-            Use 1 for harmonics spaced 1*E_IR or the Ti:Sa CEP scan.
+        fit_function : function, optional
+            The function to fit. First argument must be time parameter.
+            Second argument should be phase of interest, third its amplitude.
+            Default is a 2omega cosine with linear background.
     
         Returns
         -------
@@ -1644,28 +1647,20 @@ class RABBITT_scan():
             oscillation = self.SB_oscillation
         if labels is None:
             labels = self._legend_name(self.n_sidebands)
-    
-        def cos(t, phi, a, b): # fittable cosine with linear background
-            return a * np.cos(omega*omega_IR * t - phi) + b * t
         
         self.phases = np.array([])
         self.phase_errors = np.array([])
         cos_fit_popts = []
     
-        try: tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
-        except AttributeError: # time scale has not jet been calculated
-            self.time_steps() # calculate the time scale
-            tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
-    
+        tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
     
         for i in range(len(oscillation)):
     
             # perform cosine fit
-            normalization = np.max(np.abs(oscillation[i])) # to make initial guess closer
-            popt, pcov = scipy.optimize.curve_fit(cos, self.times, oscillation[i]/normalization)
-            popt[1:] *= normalization
+            popt, pcov = scipy.optimize.curve_fit(fit_function, self.times, 
+                                                  oscillation[i])
             # write down phase parameters
-            cos_fit_popts.append(np.append(omega, popt))
+            cos_fit_popts.append(popt)
             if popt[1] > 0:
                 self.phases = np.append(self.phases, (popt[0])%(2*np.pi))
             else:
@@ -1676,7 +1671,7 @@ class RABBITT_scan():
             # show corresponding plot
             plt.figure((self._prefix() + labels[i]), clear=True)
             plt.plot(self.times, oscillation[i], 'x-', color='r', label='measurement')
-            plt.plot(tt, cos(tt, *popt), color='b', label='fit')
+            plt.plot(tt, fit_function(tt, *popt), color='b', label='fit')
             plt.xlabel('assumed time [fs]')
             plt.ylabel('normalized count difference')
             plt.legend()
@@ -1686,6 +1681,13 @@ class RABBITT_scan():
         return self.phases, self.phase_errors
 
 
+    def phases_cosine(self, oscillation=None, labels=None):
+        """
+        Define the time axis given the steps size for the piezo in microns or radians.
+        Legacy alias - use the more flexible phases_fit.
+
+        """
+        return self.phases_fit(oscillation, labels, cos_lin_bg)
 
         
 #%% Example usage
