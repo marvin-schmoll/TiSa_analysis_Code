@@ -19,13 +19,13 @@ from matplotlib.colors import LogNorm
 import cmasher as cmr # makes better colormaps available, comment out if not installed
 import scipy.signal
 from scipy.optimize import curve_fit
-import warnings
+import scipy.ndimage as ndi
+import abel  # PyAbel library → used for Abel inversion (recover 3D distribution from 2D projection)
 
+import warnings
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 from enum import Enum
-
-import abel  # PyAbel library → used for Abel inversion (recover 3D distribution from 2D projection)
 
 import tkinter as tk
 from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
@@ -815,7 +815,8 @@ class VMI_scan():
     
 
 
-    def calibrate_detector_efficiency(self, pixel_threshold=5000, origin=default_origin):
+    def calibrate_detector_efficiency(self, pixel_threshold=3, origin=default_origin,
+                                      saving=True):
         """
         Calculates signal difference between top and bottom half of the image.
         TODO: this method is still in development
@@ -827,15 +828,17 @@ class VMI_scan():
         pixel_threshold : int or float
             Minimal signal per pixel for a correction to be calculated.
             For pixels below threshold the factor will be set to 1.
+        saving : bool, optional
+            Save the correction map as h5 file. The default is True.
 
         Returns
         -------
-        eff_map : np.array
+        corr_map : np.array
             Map which can be applied to correct for detector efficiency.
 
         """
         
-        avg_image = self.scan.sum(axis=0)
+        avg_image = self.scan.mean(axis=0)
         dims = avg_image.shape
         
         i = min(origin[1], dims[1]-origin[1])
@@ -852,7 +855,226 @@ class VMI_scan():
         plt.clim(0.8,1.2)
         plt.show()
         
-        return eff_map
+        corr_map = np.ones_like(avg_image, dtype=float)
+        corr_map[:,origin[1]-i:origin[1]] = 1/eff_map
+        
+        if saving:     # Save the correctin map
+            filetypes = [('HDF5 dataset','*.h5')]
+                
+            root = tk.Tk()
+            root.withdraw()
+            path = asksaveasfilename(title='Save as', defaultextension=".h5", 
+                                     filetypes=filetypes)
+            root.destroy()    
+            print("Saving at: " + path)
+            
+            with h5py.File(path, "w") as f:
+                f.create_dataset("map", data=corr_map)
+        
+        return corr_map
+    
+    
+    
+    def rotate_raw_image(self, angle):
+        """
+        Rotates the raw VMI image in mathematically positive direction 
+        (meaning anticlockwise).
+
+        Parameters
+        ----------
+        angle : float
+            The rotation angle in degrees.
+
+        Returns
+        -------
+        None.
+
+        """
+        self.scan = ndi.rotate(self.scan, angle, axes=(1,2), reshape=False, order=1, mode='nearest')
+    
+    
+    
+    def correct_detector_efficiency(self, correct_half="bottom", min_counts=3,
+                                    smooth_sigma=3, clip_range=(0.8, 1.6), exclude_center=True,
+                                    plotting=True, saving=True):
+        """
+        Calculates signal difference between top and bottom half of the image.
+        (Lightly adapted from Jahanzeb)        
+
+        Parameters
+        ----------
+        correct_half : str, optional
+            The half of the image ("top" or "bottom")to use as a reference. 
+            The opposite side will be corrected to look the same. 
+            The default is "bottom".
+        min_counts : int or float, optional
+            Minimal signal per pixel for a correction to be calculated.
+            For pixels below threshold the factor will be set to 1.
+        smooth_sigma : int, optional
+            Size of a gaussian filter used to smooth the output. 
+            The default is 3.
+        clip_range : 2-tuple of float, optional
+            Upper and lower limit for the pixel-wise correction factors. 
+            The default is (0.8, 1.6).
+        exclude_center : bool, optional
+            Exclude the center line from this calculation. The default is True.
+        plotting : bool, optional
+            Show some diagnostic plots. The default is True.
+        saving : bool, optional
+            Save the correction map as h5 file. The default is True.
+
+        Raises
+        ------
+        ValueError
+            If correct image half is not selected.
+
+        Returns
+        -------
+        corr_map : np.array
+            Map which can be applied to correct for detector efficiency.
+        
+        Note
+        ----
+        This method was in large portions written by AI.
+
+        """
+        
+        avg_raw_delay = self.scan.mean(axis=0)
+        
+        
+        c = self.origin[1]               # split index along axis=1
+        ny = avg_raw_delay.shape[1]
+        eps = 1e-12
+
+        if exclude_center:
+            m = min(c, ny - (c + 1))
+            # same orientation you used before:
+            bot_slice = slice(c - m, c)           # left side of split
+            top_slice = slice(c + 1, c + 1 + m)   # right side of split
+        else:
+            m = min(c, ny - c - 1)
+            top_slice = slice(c - m, c + 1)
+            bot_slice = slice(c, c + m + 1)
+
+        print("split index c =", c)
+        print("paired half-width m =", m)
+        print("bot_slice =", bot_slice)
+        print("top_slice =", top_slice)
+
+        top = avg_raw_delay[:, top_slice].astype(float)
+        bot = avg_raw_delay[:, bot_slice].astype(float)
+
+        # mirror paired pixels
+        bot_mirrored_to_top = bot[:, ::-1]
+        top_mirrored_to_bot = top[:, ::-1]
+
+        corr_map = np.ones_like(avg_raw_delay, dtype=float)
+
+        if correct_half.lower() == "top":
+            # scale TOP to match BOTTOM
+            ratio_raw = np.ones_like(top, dtype=float)
+            valid = (top > min_counts) & (bot_mirrored_to_top > min_counts)
+            ratio_raw[valid] = bot_mirrored_to_top[valid] / (top[valid] + eps)
+
+            ratio_smooth = ratio_raw.copy()
+            ratio_smooth[~valid] = 1.0
+            ratio_smooth = ndi.gaussian_filter(ratio_smooth, sigma=smooth_sigma)
+            ratio_smooth[~valid] = 1.0
+            ratio_smooth = np.clip(ratio_smooth, clip_range[0], clip_range[1])
+
+            corr_map[:, top_slice] = ratio_smooth
+
+        elif correct_half.lower() == "bottom":
+            # scale BOTTOM to match TOP
+            ratio_raw = np.ones_like(bot, dtype=float)
+            valid = (bot > min_counts) & (top_mirrored_to_bot > min_counts)
+            ratio_raw[valid] = top_mirrored_to_bot[valid] / (bot[valid] + eps)
+
+            ratio_smooth = ratio_raw.copy()
+            ratio_smooth[~valid] = 1.0
+            ratio_smooth = ndi.gaussian_filter(ratio_smooth, sigma=smooth_sigma)
+            ratio_smooth[~valid] = 1.0
+            ratio_smooth = np.clip(ratio_smooth, clip_range[0], clip_range[1])
+
+            corr_map[:, bot_slice] = ratio_smooth
+
+        else:
+            raise ValueError("CORRECT_HALF must be 'top' or 'bottom'")
+
+        print("valid pixels:", int(np.sum(valid)), "/", valid.size, f"({100*np.sum(valid)/valid.size:.2f}%)")
+        print("ratio_raw min/max/mean:", np.min(ratio_raw), np.max(ratio_raw), np.mean(ratio_raw))
+        print("ratio_smooth min/max/mean:", np.min(ratio_smooth), np.max(ratio_smooth), np.mean(ratio_smooth))
+        print("corr_map min/max/mean:", np.min(corr_map), np.max(corr_map), np.mean(corr_map))
+
+        if plotting:    # Diagnostics for corr_map
+            fig, axs = plt.subplots(2, 3, figsize=(14, 8))
+    
+            axs[0, 0].set_title("Delay avg raw")
+            axs[0, 0].imshow(avg_raw_delay.T, origin='lower', aspect='auto')
+            axs[0, 0].axhline(self.origin[1], color='w', ls='--', lw=0.8)
+    
+            axs[0, 1].set_title("Correction map (full)")
+            im1 = axs[0, 1].imshow(corr_map.T, origin='lower', aspect='auto',
+                                   cmap='PiYG', vmin=0.8, vmax=1.2)
+            axs[0, 1].axhline(self.origin[1], color='k', ls='--', lw=0.8)
+            plt.colorbar(im1, ax=axs[0, 1], fraction=0.046, pad=0.04)
+    
+            axs[0, 2].set_title("Valid mask")
+            axs[0, 2].imshow(valid.T, origin='lower', aspect='auto', cmap='gray')
+    
+            axs[1, 0].set_title("ratio_raw")
+            im2 = axs[1, 0].imshow(ratio_raw.T, origin='lower', aspect='auto',
+                                   cmap='PiYG', vmin=clip_range[0], vmax=clip_range[1])
+            plt.colorbar(im2, ax=axs[1, 0], fraction=0.046, pad=0.04)
+    
+            axs[1, 1].set_title("ratio_smooth")
+            im3 = axs[1, 1].imshow(ratio_smooth.T, origin='lower', aspect='auto',
+                                   cmap='PiYG', vmin=clip_range[0], vmax=clip_range[1])
+            plt.colorbar(im3, ax=axs[1, 1], fraction=0.046, pad=0.04)
+    
+            axs[1, 2].set_title("Histogram of correction factors")
+            axs[1, 2].hist(ratio_smooth[np.isfinite(ratio_smooth)].ravel(), bins=100)
+            axs[1, 2].axvline(1.0, color='r', ls='--', lw=1)
+            axs[1, 2].set_xlabel("factor")
+    
+            plt.tight_layout()
+            plt.show()
+        
+        if saving:     # Save the correctin map
+            filetypes = [('HDF5 dataset','*.h5')]
+                
+            root = tk.Tk()
+            root.withdraw()
+            path = asksaveasfilename(title='Save as', defaultextension=".h5", 
+                                     filetypes=filetypes)
+            root.destroy()    
+            print("Saving at: " + path)
+            
+            with h5py.File(path, "w") as f:
+                f.create_dataset("map", data=corr_map)
+         
+        return corr_map
+    
+    
+    
+    def apply_detector_efficiency_map(self, corr_map):
+        """
+        Apply a previously calculated efficiency map to the raw data.
+
+        Parameters
+        ----------
+        corr_map : 2D np.array
+            The map to use for correction.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        self.scan = self.scan * corr_map
+        
+        
     
     
 @dataclass
@@ -1256,7 +1478,58 @@ class RABBITT_scan():
             plt.savefig('trace.png', dpi=300)
         
         plt.show()     
+    
+    
+    
+    def save_RABBITT_trace(self, dataset=None):
+        """
+        Saves the RABBITT trace along with some additional info in a h5 file.
 
+        Parameters
+        ----------
+        dataset : 2D np.array, optional
+            The scan to save. The default is None, which saves the raw data.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        if dataset is None: # save raw dataset by default
+            dataset = self.speed_distributions_jacobi
+        
+        filetypes = [('HDF5 dataset','*.h5')]
+            
+        root = tk.Tk()
+        root.withdraw()
+        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
+                                 filetypes=filetypes)
+        root.destroy()    
+        print("Saving at: " + path)
+        
+        if path.split(".")[-1] == "h5": # Save as h5 dataset
+            with h5py.File(path, "w") as f:
+                f.create_dataset("data", data=self.speed_axis).attrs.update({
+                                    "description": "Radial position in abel inverted image",
+                                    "unit": "pixels"})
+                f.create_dataset("energy_axis", data=self.energies).attrs.update({
+                                    "description": "Photoelectron energies",
+                                    "unit": "eV"})
+                f.create_dataset("delay_axis", data=self.times).attrs.update({
+                                    "description": "IR phase delay",
+                                    "unit": "rad"})
+                f.create_dataset("harmonic_locations", data=self.harmonics).attrs.update({
+                                    "description": "Position of harmonic peaks",
+                                    "units": "pixels"})
+                f.create_dataset("harmonic_orders", data=self.n_harmonics).attrs.update({
+                                    "description": "Order of harmonic peaks"})
+                f.create_dataset("sideband_locations", data=self.sidebands).attrs.update({
+                                    "description": "Position of sideband peaks",
+                                    "units": "pixels"})
+                f.create_dataset("sideband_orders", data=self.n_sidebands).attrs.update({
+                                    "description": "Order of sideband peaks"})
+    
 
 
     def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None, 
@@ -1451,15 +1724,15 @@ class RABBITT_scan():
         
         # Perform all the Fourier transforms
         fouriers = [np.fft.fft(single_line) for single_line in self.data_diff.T]
-        fourier_map = np.abs(fouriers)
+        self.fourier_map = np.abs(fouriers)
         fourier_phases = np.angle(fouriers)
-        fourier_spectrum = np.nansum(fourier_map, axis=0)
+        fourier_spectrum = np.nansum(self.fourier_map, axis=0)
         
         # Find oscillation frequency and extract phase there
         peak = np.argmax(fourier_spectrum[3:]) + 3
         print('Used fourier bin ' + str(peak))
         self.phase_by_energy = -fourier_phases.T[peak]
-        self.depth_by_energy = fourier_map.T[peak]
+        self.depth_by_energy = self.fourier_map.T[peak]
 
         # show corresponding plot
         if plotting == True:
@@ -1477,7 +1750,7 @@ class RABBITT_scan():
         ----------
         plotting : bool, optional
             Whether to directly plot the result. The default is True.
-        function : function, optional
+        fit_function : function, optional
             The function to fit. First argument must be time parameter.
             Second argument should be phase of interest, third its amplitude.
             Default is a 2omega cosine with linear background.
@@ -1651,7 +1924,6 @@ class RABBITT_scan():
         self.phases = np.array([])
         self.phase_errors = np.array([])
         cos_fit_popts = []
-    
         tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
     
         for i in range(len(oscillation)):
