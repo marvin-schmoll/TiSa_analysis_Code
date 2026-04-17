@@ -182,6 +182,7 @@ class VMI_scan():
     origin: Tuple[int, int] = default_origin                # center of the VMI image in pixels
     
     # --- Speed distributions ---
+    corr_map: np.ndarray | None = None                      # detector efficiency correction map
     speed_distributions: np.ndarray | None = None           # speed distributions obtained from angular integration of inverted images
     speed_distribution: np.ndarray | None = None            # single speed distribution integrated over array
     speed_distributions_jacobi: np.ndarray | None = None    # speed distributions multiplied by jacobi determinant
@@ -816,7 +817,7 @@ class VMI_scan():
 
 
     def calibrate_detector_efficiency(self, pixel_threshold=3, origin=default_origin,
-                                      saving=True):
+                                      saving=True, apply=True):
         """
         Calculates signal difference between top and bottom half of the image.
         TODO: this method is still in development
@@ -830,6 +831,8 @@ class VMI_scan():
             For pixels below threshold the factor will be set to 1.
         saving : bool, optional
             Save the correction map as h5 file. The default is True.
+        apply : bool, optional
+            Directly apply the calculated map to the raw scan. The default is True.
 
         Returns
         -------
@@ -855,8 +858,8 @@ class VMI_scan():
         plt.clim(0.8,1.2)
         plt.show()
         
-        corr_map = np.ones_like(avg_image, dtype=float)
-        corr_map[:,origin[1]-i:origin[1]] = 1/eff_map
+        self.corr_map = np.ones_like(avg_image, dtype=float)
+        self.corr_map[:,origin[1]-i:origin[1]] = 1/eff_map
         
         if saving:     # Save the correctin map
             filetypes = [('HDF5 dataset','*.h5')]
@@ -869,9 +872,12 @@ class VMI_scan():
             print("Saving at: " + path)
             
             with h5py.File(path, "w") as f:
-                f.create_dataset("map", data=corr_map)
+                f.create_dataset("map", data=self.corr_map)
         
-        return corr_map
+        if apply:
+            self.scan = self.scan * self.corr_map
+        
+        return self.corr_map
     
     
     
@@ -896,7 +902,7 @@ class VMI_scan():
     
     def correct_detector_efficiency(self, correct_half="bottom", min_counts=3,
                                     smooth_sigma=3, clip_range=(0.8, 1.6), exclude_center=True,
-                                    plotting=True, saving=True):
+                                    plotting=True, saving=True, apply=True):
         """
         Calculates signal difference between top and bottom half of the image.
         (Lightly adapted from Jahanzeb)        
@@ -922,6 +928,8 @@ class VMI_scan():
             Show some diagnostic plots. The default is True.
         saving : bool, optional
             Save the correction map as h5 file. The default is True.
+        apply : bool, optional
+            Directly apply the calculated map to the raw scan. The default is True.
 
         Raises
         ------
@@ -968,7 +976,7 @@ class VMI_scan():
         bot_mirrored_to_top = bot[:, ::-1]
         top_mirrored_to_bot = top[:, ::-1]
 
-        corr_map = np.ones_like(avg_raw_delay, dtype=float)
+        self.corr_map = np.ones_like(avg_raw_delay, dtype=float)
 
         if correct_half.lower() == "top":
             # scale TOP to match BOTTOM
@@ -982,7 +990,7 @@ class VMI_scan():
             ratio_smooth[~valid] = 1.0
             ratio_smooth = np.clip(ratio_smooth, clip_range[0], clip_range[1])
 
-            corr_map[:, top_slice] = ratio_smooth
+            self.corr_map[:, top_slice] = ratio_smooth
 
         elif correct_half.lower() == "bottom":
             # scale BOTTOM to match TOP
@@ -996,7 +1004,7 @@ class VMI_scan():
             ratio_smooth[~valid] = 1.0
             ratio_smooth = np.clip(ratio_smooth, clip_range[0], clip_range[1])
 
-            corr_map[:, bot_slice] = ratio_smooth
+            self.corr_map[:, bot_slice] = ratio_smooth
 
         else:
             raise ValueError("CORRECT_HALF must be 'top' or 'bottom'")
@@ -1004,7 +1012,7 @@ class VMI_scan():
         print("valid pixels:", int(np.sum(valid)), "/", valid.size, f"({100*np.sum(valid)/valid.size:.2f}%)")
         print("ratio_raw min/max/mean:", np.min(ratio_raw), np.max(ratio_raw), np.mean(ratio_raw))
         print("ratio_smooth min/max/mean:", np.min(ratio_smooth), np.max(ratio_smooth), np.mean(ratio_smooth))
-        print("corr_map min/max/mean:", np.min(corr_map), np.max(corr_map), np.mean(corr_map))
+        print("corr_map min/max/mean:", np.min(self.corr_map), np.max(self.corr_map), np.mean(self.corr_map))
 
         if plotting:    # Diagnostics for corr_map
             fig, axs = plt.subplots(2, 3, figsize=(14, 8))
@@ -1014,7 +1022,7 @@ class VMI_scan():
             axs[0, 0].axhline(self.origin[1], color='w', ls='--', lw=0.8)
     
             axs[0, 1].set_title("Correction map (full)")
-            im1 = axs[0, 1].imshow(corr_map.T, origin='lower', aspect='auto',
+            im1 = axs[0, 1].imshow(self.corr_map.T, origin='lower', aspect='auto',
                                    cmap='PiYG', vmin=0.8, vmax=1.2)
             axs[0, 1].axhline(self.origin[1], color='k', ls='--', lw=0.8)
             plt.colorbar(im1, ax=axs[0, 1], fraction=0.046, pad=0.04)
@@ -1051,20 +1059,24 @@ class VMI_scan():
             print("Saving at: " + path)
             
             with h5py.File(path, "w") as f:
-                f.create_dataset("map", data=corr_map)
+                f.create_dataset("map", data=self.corr_map)
+        
+        if apply:
+            self.scan = self.scan * self.corr_map
          
-        return corr_map
+        return self.corr_map
     
     
     
-    def apply_detector_efficiency_map(self, corr_map):
+    def read_detector_efficiency_map(self, file=None):
         """
         Apply a previously calculated efficiency map to the raw data.
 
         Parameters
         ----------
-        corr_map : 2D np.array
-            The map to use for correction.
+        file : str, optional
+            Path to h5 file containing the correction map.
+            If not specified open file selection dialog.
 
         Returns
         -------
@@ -1072,7 +1084,17 @@ class VMI_scan():
 
         """
         
-        self.scan = self.scan * corr_map
+        if file is None:
+            filetypes = [('HDF5 dataset','*.h5')]
+            root = tk.Tk()
+            root.withdraw()
+            file = askopenfilename(title='Open file containing detector efficiency map', 
+                                   defaultextension=".h5", filetypes=filetypes)
+            root.destroy()    
+        
+        if file.split(".")[-1] == "h5": # Read from h5 dataset
+            with h5py.File(file, "r") as f:
+                self.corr_map = np.array(f['map'])
         
         
     
@@ -1103,6 +1125,7 @@ class RABBITT_scan():
     # private backing storage for owned data
     _times: Optional[np.ndarray] = field(default=None, repr=False)
     _energies: Optional[np.ndarray] = field(default=None, repr=False)
+    _nsteps: Optional[int] = field(default=None, repr=False)
     
     # Global options
     min_energy: float = 0                                   # lower energy limit for plotting
@@ -1161,13 +1184,10 @@ class RABBITT_scan():
         elif self.data is not None:
             if self.times is None or self.energies is None:
                 raise ValueError("Must provide times and energies with data.")
-            # transfer ownership
-            self._times = self.times
-            self._energies = self.energies
-            # remove public copies
-            self.times = None
-            self.energies = None    
-            raise NotImplementedError("It is planned but not yet tested to read data not from VMI")
+            
+            self.nsteps = self.data.shape[0]
+            self.speed_distributions_jacobi = self.data
+            self.speed_distribution_jacobi = normalized(self.data.sum(axis=0))
             # TODO: recalculate everything else needed?
             return
 
@@ -1237,7 +1257,13 @@ class RABBITT_scan():
     # metadata passthroughs
     @property
     def nsteps(self):
-        return self.vmi.nsteps if self.vmi is not None else None
+        return self.vmi.nsteps if self.vmi is not None else self._nsteps
+    
+    @nsteps.setter
+    def nsteps(self, value: int):
+        if self.vmi is not None:
+            raise AttributeError("energies is read-only when sourced from VMI")
+        self._nsteps = value    
     
     @property
     def origin(self):
@@ -1510,7 +1536,7 @@ class RABBITT_scan():
         
         if path.split(".")[-1] == "h5": # Save as h5 dataset
             with h5py.File(path, "w") as f:
-                f.create_dataset("data", data=self.speed_axis).attrs.update({
+                f.create_dataset("data", data=dataset).attrs.update({
                                     "description": "Radial position in abel inverted image",
                                     "unit": "pixels"})
                 f.create_dataset("energy_axis", data=self.energies).attrs.update({
