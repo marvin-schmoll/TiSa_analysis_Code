@@ -1127,6 +1127,13 @@ class RABBITT_scan():
     _energies: Optional[np.ndarray] = field(default=None, repr=False)
     _nsteps: Optional[int] = field(default=None, repr=False)
     
+    # Define what belongs to VMI
+    # This list includes axes, metadata, and helper methods like _phase_axis
+    DELEGATED_ATTRS = {
+        'times', 'angles', 'distances', 'energies', 'speed_axis', 'velocity_axis', 
+        'nsteps', 'origin', 'types', 'scan_type'
+    }
+    
     # Global options
     min_energy: float = 0                                   # lower energy limit for plotting
     max_energy: float = 19                                  # upper energy limit for plotting
@@ -1172,6 +1179,46 @@ class RABBITT_scan():
     phase_errors: np.ndarray | None = None
     cos_fit_popts: np.ndarray | None = None
 
+    def __getattr__(self, name):
+        """
+        Dynamically delegate attribute access to self.vmi if:
+        1. The attribute is in DELEGATED_ATTRS list, AND
+        2. self.vmi actually exists (is not None).
+        """
+        # Prevent infinite recursion if __init__ hasn't finished yet or vmi is missing
+        if name in self.DELEGATED_ATTRS:
+            if self.vmi is not None:
+                return getattr(self.vmi, name)
+            else:
+                # Optional: If RABBITT owns its own data (e.g., self._times), check for it.
+                # This handles the "Case 2" logic from your context where data is explicit.
+                private_attr = f"_{name}"
+                if hasattr(self, private_attr):
+                    return getattr(self, private_attr)
+        
+        # If not found and not delegated, raise the standard error
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+    def __setattr__(self, name, value):
+        """
+        Prevent overwriting attributes if they are delegated to self.vmi.
+        This replaces the individual @property.setter logic.
+        """
+        # If we are setting 'vmi' itself, allow it (otherwise we break initialization)
+        if name == 'vmi':
+            super().__setattr__(name, value)
+            return
+
+        # If we are setting a delegated attribute and we rely on VMI, block it.
+        if name in self.DELEGATED_ATTRS and hasattr(self, 'vmi') and self.vmi is not None:
+            raise AttributeError(
+                f"'{name}' is read-only when sourced from VMI. "
+                "You cannot overwrite calibration data."
+            )
+            
+        # Otherwise, set the attribute normally (e.g., self._times, self.data, etc.)
+        super().__setattr__(name, value)
+
     def __post_init__(self):
         """Initialize depending on which input was supplied."""
 
@@ -1193,89 +1240,6 @@ class RABBITT_scan():
 
         # No valid input
         raise ValueError("RABBITT_scan must be given either vmi or data + times + energies.")
-
-
-    # ──────────────────────────────────────────────────────────────────
-    # ####### Delegating / owned axes (public API) #######
-    # ──────────────────────────────────────────────────────────────────
-    # sources the respective arrays as read_only from the vmi class if one exists
-    # otherwise either delegates to private attributes which can be modified
-    # or throws an error in case those don't exist
-    
-    @property
-    def times(self) -> np.ndarray:
-        if self.vmi is not None:
-            return self.vmi.times
-        if self._times is None:
-            raise AttributeError("times not initialized")
-        return self._times
-    
-    @times.setter
-    def times(self, value: np.ndarray):
-        if self.vmi is not None:
-            raise AttributeError("times is read-only when sourced from VMI")
-        self._times = value
-    
-    @property
-    def angles(self) -> np.ndarray:
-        if self.vmi is not None:
-            return self.vmi.angles
-        raise AttributeError("angles is only available when sourced from VMI")
-    
-    @property
-    def distances(self) -> np.ndarray:
-        if self.vmi is not None:
-            return self.vmi.distances
-        raise AttributeError("distances is only available when sourced from VMI")
-    
-    @property
-    def energies(self) -> np.ndarray:
-        if self.vmi is not None:
-            return self.vmi.energies
-        if self._energies is None:
-            raise AttributeError("energies not initialized")
-        return self._energies
-    
-    @energies.setter
-    def energies(self, value: np.ndarray):
-        if self.vmi is not None:
-            raise AttributeError("energies is read-only when sourced from VMI")
-        self._energies = value
-    
-    @property
-    def speed_axis(self) -> np.ndarray:
-        if self.vmi is not None:
-            return self.vmi.speed_axis
-        raise AttributeError("speed_axis is only available when sourced from VMI")
-    
-    @property
-    def velocity_axis(self) -> np.ndarray:
-        if self.vmi is not None:
-            return self.vmi.velocity_axis
-        raise AttributeError("velocity_axis is only available when sourced from VMI")
-    
-    # metadata passthroughs
-    @property
-    def nsteps(self):
-        return self.vmi.nsteps if self.vmi is not None else self._nsteps
-    
-    @nsteps.setter
-    def nsteps(self, value: int):
-        if self.vmi is not None:
-            raise AttributeError("energies is read-only when sourced from VMI")
-        self._nsteps = value    
-    
-    @property
-    def origin(self):
-        return self.vmi.origin if self.vmi is not None else None
-
-    @property
-    def types(self):
-        return self.vmi.types if self.vmi is not None else None
-
-    @property
-    def scan_type(self):
-        return self.vmi.scan_type if self.vmi is not None else None
     
 
     def _build_from_vmi(self):
