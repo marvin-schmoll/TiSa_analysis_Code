@@ -28,7 +28,7 @@ from typing import Optional, Tuple
 from enum import Enum
 
 import tkinter as tk
-from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
+from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory
 from tqdm import tqdm  # progress bar in loops
 
 import utility_library as util  # smoothing, selecting ranges, finding FWHM, colors, etc.
@@ -336,13 +336,7 @@ class VMI_scan():
         '''Saves the raw or inverted VMI images of the scan'''
             
         filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
-            
-        root = tk.Tk()
-        root.withdraw()
-        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
-                                 filetypes=filetypes)
-        root.destroy()    
-        print("Saving at: " + path)
+        path = util.select_file("save", title='Save as', filetypes=filetypes)
         
         if path.split(".")[-1] == "npy": # Save as numpy binary file
             if include_inverted: np.save(path, self.scan)
@@ -357,25 +351,18 @@ class VMI_scan():
 
 
 
-    def read_scan_images(self, files=None):
-        '''Reads h5 or npy files containing the raw VMI images of the scan'''
+    def read_scan_images(self, file=None):
+        '''Reads h5 or npy file containing the raw VMI images of the scan'''
         
-        if type(files) is str:
-            files = [files]
+        filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
+        file = util.select_file(file, title='Open scan file containing raw VMI images',
+                              filetypes=filetypes)
         
-        if files is None:
-            filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
-            root = tk.Tk()
-            root.withdraw()
-            path = askopenfilename(title='Open scan file containing raw VMI images', 
-                                   defaultextension=".h5", filetypes=filetypes)
-            root.destroy()    
+        if file.split(".")[-1] == "npy": # Read numpy binary file
+            self.scan = np.load(file)
         
-        if path.split(".")[-1] == "npy": # Read numpy binary file
-            self.scan = np.load(path)
-        
-        elif path.split(".")[-1] == "h5": # Read from h5 dataset
-            with h5py.File(path, "r") as f:
+        elif file.split(".")[-1] == "h5": # Read from h5 dataset
+            with h5py.File(file, "r") as f:
                 self.scan = np.array(f['scan'])      
         
         self.nsteps = len(self.scan)
@@ -524,11 +511,8 @@ class VMI_scan():
         """
         filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
             
-        root = tk.Tk()
-        root.withdraw()
-        path = askopenfilename(title='Open scan file containing inverted VMI images', 
-                               defaultextension=".h5", filetypes=filetypes)
-        root.destroy()    
+        path = util.select_file(title='Open scan file containing inverted VMI images', 
+                              filetypes=filetypes)    
         
         if path.split(".")[-1] == "npy": # Read numpy binary file
             self.inverted_scan = np.load(path)
@@ -661,14 +645,7 @@ class VMI_scan():
     def save_energy_scale(self):
         '''saves the energy scale and peak locations of a scan'''
         
-        filetypes = [('HDF5 dataset','*.h5')]
-            
-        root = tk.Tk()
-        root.withdraw()
-        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
-                                 filetypes=filetypes)
-        root.destroy()    
-        print("Saving at: " + path)
+        path = util.select_file("save", title='Save energy scale as')
         
         if path.split(".")[-1] == "h5": # Save as h5 dataset
             with h5py.File(path, "w") as f:
@@ -695,13 +672,7 @@ class VMI_scan():
     def read_energy_scale(self, file=None):
         '''Reads h5 files containing the energy calibration'''
             
-        if file is None:
-            filetypes = [('HDF5 dataset','*.h5')]
-            root = tk.Tk()
-            root.withdraw()
-            file = askopenfilename(title='Open file containing energy scale', 
-                                   defaultextension=".h5", filetypes=filetypes)
-            root.destroy()    
+        file = util.select_file(file, title='Open file containing energy scale')
         
         if file.split(".")[-1] == "h5": # Read from h5 dataset
             with h5py.File(file, "r") as f:
@@ -861,16 +832,8 @@ class VMI_scan():
         self.corr_map = np.ones_like(avg_image, dtype=float)
         self.corr_map[:,origin[1]-i:origin[1]] = 1/eff_map
         
-        if saving:     # Save the correctin map
-            filetypes = [('HDF5 dataset','*.h5')]
-                
-            root = tk.Tk()
-            root.withdraw()
-            path = asksaveasfilename(title='Save as', defaultextension=".h5", 
-                                     filetypes=filetypes)
-            root.destroy()    
-            print("Saving at: " + path)
-            
+        if saving:     # Save the correction map
+            path = util.select_file("save", title='Save correction map as')
             with h5py.File(path, "w") as f:
                 f.create_dataset("map", data=self.corr_map)
         
@@ -1048,16 +1011,8 @@ class VMI_scan():
             plt.tight_layout()
             plt.show()
         
-        if saving:     # Save the correctin map
-            filetypes = [('HDF5 dataset','*.h5')]
-                
-            root = tk.Tk()
-            root.withdraw()
-            path = asksaveasfilename(title='Save as', defaultextension=".h5", 
-                                     filetypes=filetypes)
-            root.destroy()    
-            print("Saving at: " + path)
-            
+        if saving:     # Save the correction map
+            path = util.select_file("save", title='Save correction map as')
             with h5py.File(path, "w") as f:
                 f.create_dataset("map", data=self.corr_map)
         
@@ -1084,17 +1039,13 @@ class VMI_scan():
 
         """
         
-        if file is None:
-            filetypes = [('HDF5 dataset','*.h5')]
-            root = tk.Tk()
-            root.withdraw()
-            file = askopenfilename(title='Open file containing detector efficiency map', 
-                                   defaultextension=".h5", filetypes=filetypes)
-            root.destroy()    
+        file = util.select_file(file, title='Open file containing detector efficiency map')
         
         if file.split(".")[-1] == "h5": # Read from h5 dataset
             with h5py.File(file, "r") as f:
                 self.corr_map = np.array(f['map'])
+        
+        self.scan = self.scan * self.corr_map
         
         
     
@@ -1489,14 +1440,7 @@ class RABBITT_scan():
         if dataset is None: # save raw dataset by default
             dataset = self.speed_distributions_jacobi
         
-        filetypes = [('HDF5 dataset','*.h5')]
-            
-        root = tk.Tk()
-        root.withdraw()
-        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
-                                 filetypes=filetypes)
-        root.destroy()    
-        print("Saving at: " + path)
+        path = util.select_file("save", title='Save RABBITT trace as')
         
         if path.split(".")[-1] == "h5": # Save as h5 dataset
             with h5py.File(path, "w") as f:

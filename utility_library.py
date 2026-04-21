@@ -11,6 +11,9 @@ import numpy as np
 from matplotlib import pyplot as plt
 import scipy.signal
 import warnings
+import os
+import tkinter as tk
+from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
 
 #%% Physical constants
 
@@ -266,4 +269,56 @@ def select_ranges(plot_func, x_axis=None, *args, **kwargs):
         left = np.array([np.argmin(np.abs(x_axis - X.T[0,i])) for i in range(len(X))])
         right = np.array([np.argmin(np.abs(x_axis - X.T[1,i])) for i in range(len(X))])
         return left, right
+
+
+#%% Filedialog
+
+def select_file(operation="open", file=None, title='Select file', 
+              defaultextension=".h5", 
+              filetypes=[('HDF5 dataset','*.h5')]):
+    """
+    Wrapper around `tkinter.askopenfilename`. 
+    If a file is specified will return it, otherwise open a tkinter file
+    selection dialog.
+
+    Parameters
+    ----------
+    operation : str, optional
+        Operation to choose from tkinter. Options are "open", "save".
+        The default is "open".
+    file : str, optional
+        Option to skip the dialog by directly providing a file.
+    title : str, optional
+        Title for the window. The default is 'Open file'.
+    defaultextension : str, optional
+        Default file extension to look for. The default is ".h5".
+    filetypes : list of 2-tuple of str, optional
+        List of 2-tuples where the first element is a description and the
+        second is a file extension. The default is [('HDF5 dataset','*.h5')].
+
+    Returns
+    -------
+    file : str
+        The file to open.
+
+    """
+    
+    if file is None:
+        root = tk.Tk()
+        root.withdraw()
+        if operation == "open":
+            file = askopenfilename(title=title, defaultextension=defaultextension, 
+                                   filetypes=filetypes)
+        elif operation == "save":
+            file = asksaveasfilename(title=title, defaultextension=defaultextension, 
+                                     filetypes=filetypes)
+            print("Saving at: " + file)
+        else:
+            raise AttributeError("Unrecognized file operation. Choose 'open' or 'save'.")
+        root.destroy()
+    
+    if not os.path.isfile(file):
+        raise FileNotFoundError("File " + file  + " does not exist.")
+    
+    return file
 
