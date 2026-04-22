@@ -47,6 +47,8 @@ E_IR = h / (2*np.pi) * omega_IR   # [eV]  Photon energy (eV) from angular freque
 
 default_origin = (971, 611)  # Change (!) here if VMI camera was moved i.e (967, 607)
 
+scan_types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
+
 
 def cos_lin_bg(t, phi, a, b): # fittable cosine with linear background
     return a * np.cos(2*omega_IR * t - phi) + b * t
@@ -163,8 +165,121 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
     return R[:, 0], intensity   #radial intensity vs radius
 
 
+class AxisHelper:
+    """
+    Mixin class to handle axis units for both VMI and RABBITT scans.
+    """
+    
+    def _phase_axis(self, unit='n'):
+        '''Private subfunction used in all plotting functions using a delay axis
+        to allow for different units on said axis.'''
+    
+        # dispatch table:
+        # unit sets → (attribute_name, (delay label, CEP label), flag, warning message)
+        axis_map = {
+            ('n', 'step', 'steps', 'number'): 
+                (None, 'steps', True, None),
+            ('s', 'fs', 'as', 'second', 'seconds', 'time', 'times', 't', 'delay'):
+                ('times', ('delay [fs]', 'CEP delay [fs]'), True, 'Time scale not yet calculated'),
+            ('rad', 'mrad', 'phase', 'phi'):
+                ('angles', ('phase delay [rad]', 'CEP [rad]'), True, 'Angle scale not yet calculated'),
+            ('m', 'mm', 'um', 'x', 'dist', 'distance'):
+                ('distances', ('stage distance [mm]', 'wedge distance [mm]'), True, 'Distance scale not yet calculated'),
+        }
+    
+        for keys, (attr_name, labels, flag, warn_msg) in axis_map.items():
+            if unit.lower() in keys:
+                if attr_name is None:  # step axis
+                    return np.arange(self.nsteps), labels, flag
+    
+                axis = getattr(self, attr_name)
+                if axis is None:
+                    warnings.warn(f'{warn_msg}, using steps for the axis instead.')
+                    return self._phase_axis('n')
+                if self.scan_type.value is None:
+                    msg = "Scan type not set, run 'phase_scale' to set it"
+                    warnings.warn(msg +', using steps for the axis instead.')
+                    return self._phase_axis('n')
+                return axis, labels[self.scan_type.value], flag
+    
+        raise ValueError(
+            f'Given axis type "{unit}" not supported, try e.g. "step" or "time"'
+        )
+
+        
+    def _energy_axis(self, unit='n'):
+        '''private subfunction to allow for different units on the energy axis'''
+
+        if unit.lower() in {'n', 'step', 'steps', 'number', 'speed'}:
+            return self.speed_axis, 'speed [pixels]', True
+
+        elif unit.lower() in {'e', 'energy', 'ev', 'j'}:
+            return self.energies, 'energy [eV]', False
+        
+        elif unit.lower() in {'v', 'velocity', 'm/s', 'km/s'}:
+            return self.velocity_axis, 'velocity [km/s]', False
+
+        else: raise ValueError('Given axis type not supported, try e.g. "speed" or "energy"')
+        
+    
+    def phase_scale(self, step, step_unit='um'):
+        """
+        Define the axis for the scan parameter of the delay stage or CEP wedge.
+
+        Parameters
+        ----------
+        step : float
+            Step size used by the piezo in µm,
+            phase step by the stabilization system in mrad,
+            or CEP wedge step distance in mm.
+            Choose which to specify with step_unit.
+        
+        step_unit: 'um', 'mrad', 'mm'
+            Choose which one to specify. Default is 'um'.
+        
+        Notes
+        -----
+        If 'um' or 'mrad' is specified, the class will assume a delay scan,
+        if 'mm' is specified, the class will treat this scan as a CEP scan.
+        
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        if step_unit == 'um':
+            self.scan_type = scan_types.DELAY
+            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
+            delta_x = step                       # step size in µm
+            delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
+            delta_phi = omega_IR * delta_t       # step size in rad
+    
+        elif step_unit == 'mrad':
+            self.scan_type = scan_types.DELAY
+            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
+            delta_phi = step * 1e-3              # step size in rad
+            delta_t = delta_phi / omega_IR       # step size in fs
+            delta_x = delta_t/1e15 * c * 1e6/2   # step size in µm
+        
+        elif step_unit == 'mm':
+            self.scan_type = scan_types.CEP
+            print('CEP scan with ' + str(self.nsteps) + ' CEP steps')
+            delta_x = step                                           # step size in mm
+            delta_phi = step*CEP_factor / (lambda_IR*1e3) * 2*np.pi  # step size in rad
+            delta_t = delta_phi / omega_IR
+            
+        else: raise ValueError('Given step type not supported, try e.g. "um" or "mrad"')
+        
+        self.distances = np.linspace(0, self.nsteps*delta_x, self.nsteps)
+        self.times = np.linspace(0, self.nsteps*delta_t, self.nsteps)
+        self.angles = np.linspace(0, self.nsteps*delta_phi, self.nsteps)
+    
+    
+
 @dataclass
-class VMI_scan():
+class VMI_scan(AxisHelper):
     """
     Dataclass managing VMI scan acquisition data + results.
     For reference all data attributes of the class should be listed here.
@@ -206,62 +321,10 @@ class VMI_scan():
     def __post_init__(self):
         '''detrmine ionization potential, initialize enum for scan type'''
         self.Ip = util.ionization_energies[self.gas]    # ionization potential
-        
-        self.types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
-        self.scan_type = self.types.NONE                # type of scan performed
+        self.scan_type = scan_types.NONE                # type of scan performed
     
 
 
-    def _phase_axis(self, unit='n'):
-        '''Private subfunction used in all plotting functions using a delay axis
-        to allow for different units on said axis.'''
-    
-        # dispatch table:
-        # unit sets → (attribute_name, (delay label, CEP label), flag, warning message)
-        axis_map = {
-            ('n', 'step', 'steps', 'number'): 
-                (None, 'steps', True, None),
-            ('s', 'fs', 'as', 'second', 'seconds', 'time', 'times', 't', 'delay'):
-                ('times', ('delay [fs]', 'CEP delay [fs]'), True, 'Time scale not yet calculated'),
-            ('rad', 'mrad', 'phase', 'phi'):
-                ('angles', ('phase delay [rad]', 'CEP [rad]'), True, 'Angle scale not yet calculated'),
-            ('m', 'mm', 'um', 'x', 'dist', 'distance'):
-                ('distances', ('stage distance [mm]', 'wedge distance [mm]'), True, 'Distance scale not yet calculated'),
-        }
-    
-        for keys, (attr_name, labels, flag, warn_msg) in axis_map.items():
-            if unit.lower() in keys:
-                if attr_name is None:  # step axis
-                    return np.arange(self.nsteps), labels, flag
-    
-                axis = getattr(self, attr_name)
-                if axis is None:
-                    warnings.warn(f'{warn_msg}, using steps for the axis instead.')
-                    return self._phase_axis('n')
-                return axis, labels[self.scan_type.value], flag
-    
-        raise ValueError(
-            f'Given axis type "{unit}" not supported, try e.g. "step" or "time"'
-        )
-
-        
-    def _energy_axis(self, unit='n'):
-        '''private subfunction to allow
-            for different units on the energy axis'''
-
-        if unit.lower() in {'n', 'step', 'steps', 'number', 'speed'}:
-            return self.speed_axis, 'speed [pixels]', True
-
-        elif unit.lower() in {'e', 'energy', 'ev', 'j'}:
-            return self.energies, 'energy [eV]', False
-        
-        elif unit.lower() in {'v', 'velocity', 'm/s', 'km/s'}:
-            return self.velocity_axis, 'velocity [km/s]', False
-
-        else: raise ValueError('Given axis type not supported, try e.g. "speed" or "energy"')
-    
-    
-    
     def read_scan_files(self, files=None, bfile='', use_steps=slice(None)):
         """
         Reads a selection of h5-files corresponding to a scan and averages them.
@@ -355,8 +418,8 @@ class VMI_scan():
         '''Reads h5 or npy file containing the raw VMI images of the scan'''
         
         filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
-        file = util.select_file(file, title='Open scan file containing raw VMI images',
-                              filetypes=filetypes)
+        file = util.select_file('open', file, title='Open scan file containing raw VMI images',
+                                filetypes=filetypes)
         
         if file.split(".")[-1] == "npy": # Read numpy binary file
             self.scan = np.load(file)
@@ -511,8 +574,8 @@ class VMI_scan():
         """
         filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
             
-        path = util.select_file(title='Open scan file containing inverted VMI images', 
-                              filetypes=filetypes)    
+        path = util.select_file('open', title='Open scan file containing inverted VMI images', 
+                                filetypes=filetypes)    
         
         if path.split(".")[-1] == "npy": # Read numpy binary file
             self.inverted_scan = np.load(path)
@@ -672,7 +735,7 @@ class VMI_scan():
     def read_energy_scale(self, file=None):
         '''Reads h5 files containing the energy calibration'''
             
-        file = util.select_file(file, title='Open file containing energy scale')
+        file = util.select_file('open', file, title='Open file containing energy scale')
         
         if file.split(".")[-1] == "h5": # Read from h5 dataset
             with h5py.File(file, "r") as f:
@@ -687,8 +750,7 @@ class VMI_scan():
         # Multiplying by Jacobi determinant for plotting of PES
         self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
-    
-    
+     
     
     def time_scale(self, step, step_unit='um'):
         """
@@ -700,61 +762,6 @@ class VMI_scan():
         warnings.warn("time_scale() is deprecated and may be removed, use phase_scale() instead",
                       DeprecationWarning, stacklevel=2)
         return self.phase_scale(step, step_unit)
-
-
-    def phase_scale(self, step, step_unit='um'):
-        """
-        Define the axis for the scan parameter of the delay stage or CEP wedge.
-
-        Parameters
-        ----------
-        step : float
-            Step size used by the piezo in µm,
-            phase step by the stabilization system in mrad,
-            or CEP wedge step distance in mm.
-            Choose which to specify with step_unit.
-        
-        step_unit: 'um', 'mrad', 'mm'
-            Choose which one to specify. Default is 'um'.
-        
-        Notes
-        -----
-        If 'um' or 'mrad' is specified, the class will assume a delay scan,
-        if 'mm' is specified, the class will treat this scan as a CEP scan.
-        
-
-        Returns
-        -------
-        None.
-
-        """
-        
-        if step_unit == 'um':
-            self.scan_type = self.types.DELAY
-            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
-            delta_x = step                       # step size in µm
-            delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
-            delta_phi = omega_IR * delta_t       # step size in rad
-    
-        elif step_unit == 'mrad':
-            self.scan_type = self.types.DELAY
-            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
-            delta_phi = step * 1e-3              # step size in rad
-            delta_t = delta_phi / omega_IR       # step size in fs
-            delta_x = delta_t/1e15 * c * 1e6/2   # step size in µm
-        
-        elif step_unit == 'mm':
-            self.scan_type = self.types.CEP
-            print('CEP scan with ' + str(self.nsteps) + ' CEP steps')
-            delta_x = step                                           # step size in mm
-            delta_phi = step*CEP_factor / (lambda_IR*1e3) * 2*np.pi  # step size in rad
-            delta_t = delta_phi / omega_IR
-            
-        else: raise ValueError('Given step type not supported, try e.g. "um" or "mrad"')
-        
-        self.distances = np.linspace(0, self.nsteps*delta_x, self.nsteps)
-        self.times = np.linspace(0, self.nsteps*delta_t, self.nsteps)
-        self.angles = np.linspace(0, self.nsteps*delta_phi, self.nsteps)
     
 
 
@@ -1039,7 +1046,7 @@ class VMI_scan():
 
         """
         
-        file = util.select_file(file, title='Open file containing detector efficiency map')
+        file = util.select_file('open', file, title='Open file containing detector efficiency map')
         
         if file.split(".")[-1] == "h5": # Read from h5 dataset
             with h5py.File(file, "r") as f:
@@ -1051,7 +1058,7 @@ class VMI_scan():
     
     
 @dataclass
-class RABBITT_scan():
+class RABBITT_scan(AxisHelper):
     """
     RABBITT scan that can either:
     • delegate axes/metadata to a VMI_scan (read-only, always in sync), or
@@ -1062,7 +1069,6 @@ class RABBITT_scan():
     of the data source.
     """
     #TODO: below a list of what needs to be adressed before this version can be merged with main
-    #TODO2: simplify _phase_axis, _energy_axis!
     #TODO3: is this description complete? the one for VMI class should be already!
     #TODO6: make import of saved inverted spectra possible
     
@@ -1079,7 +1085,7 @@ class RABBITT_scan():
     _nsteps: Optional[int] = field(default=None, repr=False)
     
     # Define what belongs to VMI
-    # This list includes axes, metadata, and helper methods like _phase_axis
+    # This list includes axes, metadata, and helper methods
     DELEGATED_ATTRS = {
         'times', 'angles', 'distances', 'energies', 'speed_axis', 'velocity_axis', 
         'nsteps', 'origin', 'types', 'scan_type'
@@ -1142,7 +1148,6 @@ class RABBITT_scan():
                 return getattr(self.vmi, name)
             else:
                 # Optional: If RABBITT owns its own data (e.g., self._times), check for it.
-                # This handles the "Case 2" logic from your context where data is explicit.
                 private_attr = f"_{name}"
                 if hasattr(self, private_attr):
                     return getattr(self, private_attr)
@@ -1184,8 +1189,11 @@ class RABBITT_scan():
                 raise ValueError("Must provide times and energies with data.")
             
             self.nsteps = self.data.shape[0]
+            self.scan_type = scan_types.NONE          # type of scan performed
             self.speed_distributions_jacobi = self.data
             self.speed_distribution_jacobi = normalized(self.data.sum(axis=0))
+            self.speed_axis = np.arange(len(self.speed_distribution_jacobi))
+            self.velocity_axis = np.sqrt(2 * self.energies / m_e) / 1e3
             # TODO: recalculate everything else needed?
             return
 
@@ -1222,28 +1230,6 @@ class RABBITT_scan():
         
         self.harmonics, self.sidebands = self.vmi.harmonics, self.vmi.sidebands
         self.n_harmonics, self.n_sidebands = self.vmi.n_harmonics, self.vmi.n_sidebands
-
-
-    def _phase_axis(self, unit='n'):
-        """calls VMI function if built from VMI,
-            otherwise outputs times if specified or defaults to steps"""
-        if self.vmi is not None:
-            return self.vmi._phase_axis(unit)
-        elif unit.lower in {'s', 'fs', 'as', 'second', 'seconds', 'time', 'times', 't', 'delay'}:
-            return self.times, 'delay [fs]', True
-        else:
-            return np.arange(len(self.times)), 'steps', True
-        
-
-    def _energy_axis(self, unit='n'):
-        """calls VMI function if built from VMI,
-            otherwise outputs energies if specified or defaults to steps"""
-        if self.vmi is not None:
-            return self.vmi._energy_axis(unit)
-        elif unit.lower() in {'e', 'energy', 'ev', 'j'}:
-            return self.energies, 'energy [eV]', False
-        else:
-            return np.arange(len(self.energies)), 'steps', True
             
     
     
