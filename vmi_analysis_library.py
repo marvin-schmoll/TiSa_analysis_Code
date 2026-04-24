@@ -1132,7 +1132,8 @@ class RABBITT_scan(AxisHelper):
     # --- Fit results for integrated sidebands ---
     phases: np.ndarray | None = None
     phase_errors: np.ndarray | None = None
-    cos_fit_popts: np.ndarray | None = None
+    fit_popts: np.ndarray | None = None
+    fit_perrs: np.ndarray | None = None
 
     def __getattr__(self, name):
         """
@@ -1265,7 +1266,8 @@ class RABBITT_scan(AxisHelper):
 
 
 
-    def plot_oscillation(self, oscillation, labels=None, popts=None, fig_number=None, 
+    def plot_oscillation(self, oscillation, labels=None, popts=None, 
+                         fit_function=cos_lin_bg, fig_number=None, 
                          delay_unit='fs', size_hor=10, size_ver=8, saving=False):
         '''plots multiple oscillations in seperate subplots with line coloring showing their energies,
             each having a seperate axis indicating their relative intensity
@@ -1291,7 +1293,7 @@ class RABBITT_scan(AxisHelper):
                     pl, = ax0.plot(x_axis, oscillation[n_subfigs-1-i]*scaling, 'x-', 
                                    lw=0.8, ms=6, color=colors[n_subfigs-1-i])
                     if popts is not None:
-                        pl, = ax0.plot(fit_x_axis, cos_lin_bg(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
+                        pl, = ax0.plot(fit_x_axis, fit_function(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
                                         lw=0.6, color=darker_colors[n_subfigs-1-i])
                     axl=ax0
                 else:
@@ -1300,7 +1302,7 @@ class RABBITT_scan(AxisHelper):
                     pl, = axi.plot(x_axis, oscillation[n_subfigs-1-i]*scaling, 'x-', 
                                    lw=0.8, ms=6, color=colors[n_subfigs-1-i])
                     if popts is not None:
-                        pl, = axi.plot(fit_x_axis, cos_lin_bg(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
+                        pl, = axi.plot(fit_x_axis, fit_function(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
                                         lw=0.6, color=darker_colors[n_subfigs-1-i])
     
                     yticks = axi.yaxis.get_major_ticks()
@@ -1840,16 +1842,18 @@ class RABBITT_scan(AxisHelper):
         
         self.phases = np.array([])
         self.phase_errors = np.array([])
-        cos_fit_popts = []
+        fit_popts = []
+        fit_perrs = []
         tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
     
         for i in range(len(oscillation)):
     
-            # perform cosine fit
+            # perform fit
             popt, pcov = scipy.optimize.curve_fit(fit_function, self.times, 
                                                   oscillation[i])
             # write down phase parameters
-            cos_fit_popts.append(popt)
+            fit_popts.append(popt)
+            fit_perrs.append(np.sqrt(np.diag(pcov)))
             if popt[1] > 0:
                 self.phases = np.append(self.phases, (popt[0])%(2*np.pi))
             else:
@@ -1866,17 +1870,11 @@ class RABBITT_scan(AxisHelper):
             plt.legend()
             plt.show()
     
-        self.cos_fit_popts = np.array(cos_fit_popts)
+        self.fit_popts = np.array(fit_popts)
+        self.fit_perrs = np.array(fit_perrs)
+        
         return self.phases, self.phase_errors
 
-
-    def phases_cosine(self, oscillation=None, labels=None):
-        """
-        Define the time axis given the steps size for the piezo in microns or radians.
-        Legacy alias - use the more flexible phases_fit.
-
-        """
-        return self.phases_fit(oscillation, labels, cos_lin_bg)
 
         
 #%% Example usage
@@ -1900,5 +1898,4 @@ if __name__ == "__main__":
     hase.select_sideband_ranges(dist=10)           # select sb integration ranges
     
     legend_names = [hase._legend_name(n_SB) for n_SB in hase.n_sidebands]
-    hase.plot_oscillation(hase.SB_oscillation, legend_names, hase.cos_fit_popts, hase._prefix() + 'Sideband Oscillation')    
-    
+    hase.plot_oscillation(hase.SB_oscillation, legend_names, hase.fit_popts, hase._prefix() + 'Sideband Oscillation')    

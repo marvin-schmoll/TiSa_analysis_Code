@@ -13,7 +13,7 @@ import scipy.signal
 import warnings
 import os
 import tkinter as tk
-from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
+from tkinter.filedialog import askopenfilename, asksaveasfilename
 
 #%% Physical constants
 
