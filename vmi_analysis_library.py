@@ -19,32 +19,43 @@ from matplotlib.colors import LogNorm
 import cmasher as cmr # makes better colormaps available, comment out if not installed
 import scipy.signal
 from scipy.optimize import curve_fit
-import warnings
+import scipy.ndimage as ndi
+import abel  # PyAbel library → used for Abel inversion (recover 3D distribution from 2D projection)
 
+import warnings
 from dataclasses import dataclass, field
+from typing import Optional, Tuple
 from enum import Enum
 
-import abel
-
 import tkinter as tk
-from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory, asksaveasfilename
-from tqdm import tqdm
+from tkinter.filedialog import askopenfilename, askopenfilenames, askdirectory
+from tqdm import tqdm  # progress bar in loops
 
-import utility_library as util
-from utility_library import normalized
+import utility_library as util  # smoothing, selecting ranges, finding FWHM, colors, etc.
+from utility_library import normalized    # used everywhere (normalize signals)
 
 
 c = 2.99792458 * 10**8  # velocity of light [m/s]
 h = 4.135667696         # planck constant [eV*fs]
 omega_IR = 2.35         # [rad/fs] (for 800nm)
 lambda_IR = 800e-9      # [m]
-m_e = 5.68563 * 10**-12 # electron mass [eV/(m/s)^2]
+m_e = 5.68563 * 10**-12 # electron mass [eV/(m/s)^2]  used for converting kinetic energy to velocity
 
 CEP_factor = 9.6406e-4  # calibration factor wedge distance to CEP distance
 
-E_IR = h / (2*np.pi) * omega_IR   # [eV]
+E_IR = h / (2*np.pi) * omega_IR   # [eV]  Photon energy (eV) from angular frequency E=ℏω =(h/2π)​ω
 
-default_origin = (967, 607)  # Change (!) here if VMI camera was moved
+default_origin = (971, 611)  # Change (!) here if VMI camera was moved i.e (967, 607)
+
+scan_types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
+
+
+def cos_lin_bg(t, phi, a, b): # fittable cosine with linear background
+    return a * np.cos(2*omega_IR * t - phi) + b * t
+
+def miguel_multi_sin(t, phi3, c3, phi6, c6, phi9, c9, c0):
+    return c0 + c3*np.sin(2*omega_IR*t - phi3) + c6*np.sin(4*omega_IR*t - phi6) + c9*np.sin(6*omega_IR*t - phi9)
+
 
 
 def plot_VMI_image(image, cmap='viridis', saving=False, 
@@ -52,7 +63,7 @@ def plot_VMI_image(image, cmap='viridis', saving=False,
     '''plots a single VMI image'''
     
     if logscale:
-        image = np.where(image < 0.1, np.ones_like(image)*0.1, image)
+        image = np.where(image < 0.1, np.ones_like(image)*0.1, image) # The np.where line prevents problems from zeros / negatives (because log(0) goes to infinity)
         plt.matshow(image, norm=LogNorm(), cmap=cmap)
     else:
         plt.matshow(image, cmap=cmap)
@@ -72,8 +83,8 @@ def plot_VMI_image(image, cmap='viridis', saving=False,
 def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None, 
                          theta_low=-np.pi, theta_high=np.pi):
     """
-    Calculate the one-dimensional radial intensity profile by angular
-    integration or averaging of the image, treated either as a two-dimensional
+    Calculate the 1D radial intensity profile by angular integration or 
+    averaging of the 2D image, treated either as a two-dimensional
     distribution or as a central slice of a cylindrically symmetric
     three-dimensional distribution.
 
@@ -128,14 +139,16 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
         
     Notes
     -----
-    This is a clone of the abel.tools.vmi.radial_intensity function from thy 
+    This is a clone of the abel.tools.vmi.radial_intensity function from the 
     PyAbel library with added capability to only integrate a slice of the image
     """
-    polarIM, R, T = abel.tools.polar.reproject_image_into_polar(IM, origin, dr=dr, dt=dt)
-    # apply necessary Jacobian/normalization
-    if kind == 'int2D':
+    polarIM, R, T = abel.tools.polar.reproject_image_into_polar(IM, origin, dr=dr, dt=dt)     #Convert cartesian → polar
+                                                                                              #Takes image IM(x,y) → Converts to polar grid, polarIM(r,θ)
+    
+    # apply necessary Jacobian/normalization                                       
+    if kind == 'int2D':        #2D distribution: multiply by R 
         polarIM *= R
-    elif kind == 'int3D':
+    elif kind == 'int3D':      #3D distribution: multiply by 𝜋𝑅^2∣sin𝜃∣       
         polarIM *= np.pi * R**2 * np.abs(np.sin(T))
     elif kind == 'avg2D':
         polarIM /= 2 * np.pi
@@ -145,100 +158,18 @@ def vmi_radial_intensity(kind, IM, origin=None, dr=1, dt=None,
         raise ValueError('Incorrect kind={}'.format(kind))
 
     # integrate over theta
-    dt = T[0, 1] - T[0, 0]  # get the actual number, if dt=None was passed
-    mask = np.logical_and(theta_low < T, T < theta_high)
-    intensity = polarIM.sum(axis=1, where=mask) * dt
-
-    return R[:, 0], intensity
-
-
-@dataclass
-class RABBITT_scan():
+    dt = T[0, 1] - T[0, 0]  # get the actual number, if dt=None was passed (Calculates angular step size dt)
+    mask = np.logical_and(theta_low < T, T < theta_high)  #sum(axis=1) integrates along the theta direction → produces a 1D function of r
+    intensity = polarIM.sum(axis=1, where=mask) * dt  #multiply by dt → turns the sum into a real integral
     
-    # --- Required constructor arguments ---
-    gas: str                                                # gas used in the VMI
-    name: str | None = None
-    
-    # --- Scan data ---
-    scan: np.ndarray | None = None                          # collection of 2D images before Abel inversion
-    inverted_scan: np.ndarray | None = None                 # collection of 2D images after Abel inversion
-    nsteps: int | None = None                               # number of delay steps
-    
-    # --- Speed distributions ---
-    speed_distributions: np.ndarray | None = None           # speed distributions obtained from angular integration of inverted images
-    speed_distribution: np.ndarray | None = None            # single speed distribution integrated over array
-    speed_distributions_jacobi: np.ndarray | None = None    # speed distributions multiplied by jacobi determinant
-    speed_distribution_jacobi: np.ndarray | None = None     # integrated speed distribution multiplied by jacobi determinant
-    speed_distribution_norm: np.ndarray | None = None       # normalized speed distribution (integral is 1)
-    
-    # --- Axes ---
-    speed_axis: np.ndarray | None = None                    # photoelectron spectrum axis: speed in samples
-    energies: np.ndarray | None = None                      # photoelectron spectrum axis: energy in eV
-    velocity_axis: np.ndarray | None = None                 # photoelectron spectrum axis: velocity in m/s
-    min_energy: float = 0                                   # lower energy limit for plotting
-    max_energy: float = 19                                  # upper energy limit for plotting
-    times: np.ndarray | None = None                         # scan axis: [fs] of 800nm
-    angles: np.ndarray | None = None                        # scan axis: [rad] of 800nm
-    distances: np.ndarray | None = None                     # scan axis: [mm]
-    
-    # --- Harmonics & sidebands ---
-    harmonics: np.ndarray | None = None                     # pixel positions of HH-peaks
-    sidebands: np.ndarray | None = None                     # pixel positions of SB-peaks
-    n_harmonics: np.ndarray | None = None                   # order of HH
-    n_sidebands: np.ndarray | None = None                   # order of SB
-    left: np.ndarray | None = None                          # left edges of sidebands
-    right: np.ndarray | None = None                         # right edges of sidebands
-    HH_oscillation: np.ndarray | None = None                # signal oscillation averaged over each HH
-    SB_oscillation: np.ndarray | None = None                # signal oscillation averaged over each SB
-    HH_intensities: np.ndarray | None = None                # intensitiy of each HH
-    SB_intensities: np.ndarray | None = None                # intensitiy of each SB
-       
-    # --- Normalized / differential data ---
-    data_norm: np.ndarray | None = None                     # speed distributions normalized
-    data_diff: np.ndarray | None = None                     # speed distribution differences from average
-    data_smooth: np.ndarray | None = None                   # speed distributions smoothed
-    
-    # --- Energy-resolved results for oscillations ---
-    phase_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
-    phase_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
-    depth_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
-    depth_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
-    slope_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
-    slope_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
-    contrast_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
-    contrast_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
-    
-    # --- Fit results for integrated sidebands ---
-    phases: np.ndarray | None = None
-    phase_errors: np.ndarray | None = None
-    cos_fit_popts: np.ndarray | None = None
-    
-    
-    def __post_init__(self):
-        '''detrmine ionization potential, initialize enum for scan type'''
-        self.Ip = util.ionization_energies[self.gas]    # ionization potential
-        
-        self.types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
-        self.scan_type = self.types.NONE                # type of scan performed
-    
-      
-    
-    def _prefix(self):
-        '''changes the name like "name: " to create separate plots for each intance of the class'''
-        if self.name is None or self.name == '':
-            return ''
-        else:
-            return str(self.name) + ': '
-    
-    
-    def _legend_name(self, order, pre='SB'):
-        '''returns names as 'SB14' for plot legends'''
-        if type(order) in (int, float):
-            return pre + str(np.round(order, 1))
-        elif type(order) in (np.ndarray, list, tuple):
-            return ['SB' + str(np.round(o, 1)) for o in order]
+    return R[:, 0], intensity   #radial intensity vs radius
 
 
+class AxisHelper:
+    """
+    Mixin class to handle axis units for both VMI and RABBITT scans.
+    """
+    
     def _phase_axis(self, unit='n'):
         '''Private subfunction used in all plotting functions using a delay axis
         to allow for different units on said axis.'''
@@ -265,6 +196,10 @@ class RABBITT_scan():
                 if axis is None:
                     warnings.warn(f'{warn_msg}, using steps for the axis instead.')
                     return self._phase_axis('n')
+                if self.scan_type.value is None:
+                    msg = "Scan type not set, run 'phase_scale' to set it"
+                    warnings.warn(msg +', using steps for the axis instead.')
+                    return self._phase_axis('n')
                 return axis, labels[self.scan_type.value], flag
     
         raise ValueError(
@@ -273,8 +208,7 @@ class RABBITT_scan():
 
         
     def _energy_axis(self, unit='n'):
-        '''private subfunction to allow
-            for different units on the energy axis'''
+        '''private subfunction to allow for different units on the energy axis'''
 
         if unit.lower() in {'n', 'step', 'steps', 'number', 'speed'}:
             return self.speed_axis, 'speed [pixels]', True
@@ -286,25 +220,109 @@ class RABBITT_scan():
             return self.velocity_axis, 'velocity [km/s]', False
 
         else: raise ValueError('Given axis type not supported, try e.g. "speed" or "energy"')
+        
+    
+    def phase_scale(self, step, step_unit='um'):
+        """
+        Define the axis for the scan parameter of the delay stage or CEP wedge.
+
+        Parameters
+        ----------
+        step : float
+            Step size used by the piezo in µm,
+            phase step by the stabilization system in mrad,
+            or CEP wedge step distance in mm.
+            Choose which to specify with step_unit.
+        
+        step_unit: 'um', 'mrad', 'mm'
+            Choose which one to specify. Default is 'um'.
+        
+        Notes
+        -----
+        If 'um' or 'mrad' is specified, the class will assume a delay scan,
+        if 'mm' is specified, the class will treat this scan as a CEP scan.
+        
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        if step_unit == 'um':
+            self.scan_type = scan_types.DELAY
+            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
+            delta_x = step                       # step size in µm
+            delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
+            delta_phi = omega_IR * delta_t       # step size in rad
+    
+        elif step_unit == 'mrad':
+            self.scan_type = scan_types.DELAY
+            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
+            delta_phi = step * 1e-3              # step size in rad
+            delta_t = delta_phi / omega_IR       # step size in fs
+            delta_x = delta_t/1e15 * c * 1e6/2   # step size in µm
+        
+        elif step_unit == 'mm':
+            self.scan_type = scan_types.CEP
+            print('CEP scan with ' + str(self.nsteps) + ' CEP steps')
+            delta_x = step                                           # step size in mm
+            delta_phi = step*CEP_factor / (lambda_IR*1e3) * 2*np.pi  # step size in rad
+            delta_t = delta_phi / omega_IR
+            
+        else: raise ValueError('Given step type not supported, try e.g. "um" or "mrad"')
+        
+        self.distances = np.linspace(0, self.nsteps*delta_x, self.nsteps)
+        self.times = np.linspace(0, self.nsteps*delta_t, self.nsteps)
+        self.angles = np.linspace(0, self.nsteps*delta_phi, self.nsteps)
     
     
+
+@dataclass
+class VMI_scan(AxisHelper):
+    """
+    Dataclass managing VMI scan acquisition data + results.
+    For reference all data attributes of the class should be listed here.
+    """
     
-    def set_energy_limit(self, limit=None, left_limit=None):
-        '''allows to set an energy limit up to which structure is visible in the spectrum
-            this will be used as axis limit in all plots'''
-
-        if limit is None:
-            self.max_energy = float(np.max(self.energies))
-        else:
-            self.max_energy = float(limit)
-        assert isinstance(self.max_energy, float), "energy limit has to be float"
-
-        if left_limit is None:
-            self.min_energy = float(0)
-        else:
-            self.min_energy = float(left_limit)
-        assert isinstance(self.min_energy, float), "left energy limit has to be float"
-
+    # --- Required constructor arguments ---
+    gas: str                                                # gas used in the VMI
+    name: str | None = None
+    
+    # --- Scan data ---
+    scan: np.ndarray | None = None                          # collection of 2D images before Abel inversion
+    inverted_scan: np.ndarray | None = None                 # collection of 2D images after Abel inversion
+    nsteps: int | None = None                               # number of delay steps
+    theta_range: Tuple[float, float] | None = None          # angle range for abel inversion
+    origin: Tuple[int, int] = default_origin                # center of the VMI image in pixels
+    
+    # --- Speed distributions ---
+    corr_map: np.ndarray | None = None                      # detector efficiency correction map
+    speed_distributions: np.ndarray | None = None           # speed distributions obtained from angular integration of inverted images
+    speed_distribution: np.ndarray | None = None            # single speed distribution integrated over array
+    speed_distributions_jacobi: np.ndarray | None = None    # speed distributions multiplied by jacobi determinant
+    speed_distribution_jacobi: np.ndarray | None = None     # integrated speed distribution multiplied by jacobi determinant
+    
+    # --- Axes ---
+    speed_axis: np.ndarray | None = None                    # photoelectron spectrum axis: speed in samples
+    energies: np.ndarray | None = None                      # photoelectron spectrum axis: energy in eV
+    velocity_axis: np.ndarray | None = None                 # photoelectron spectrum axis: velocity in m/s
+    times: np.ndarray | None = None                         # scan axis: [fs] of 800nm
+    angles: np.ndarray | None = None                        # scan axis: [rad] of 800nm
+    distances: np.ndarray | None = None                     # scan axis: [mm]
+    
+    # --- Harmonics & sidebands ---
+    harmonics: np.ndarray | None = None                     # pixel positions of HH-peaks
+    sidebands: np.ndarray | None = None                     # pixel positions of SB-peaks
+    n_harmonics: np.ndarray | None = None                   # order of HH
+    n_sidebands: np.ndarray | None = None                   # order of SB
+    
+    
+    def __post_init__(self):
+        '''detrmine ionization potential, initialize enum for scan type'''
+        self.Ip = util.ionization_energies[self.gas]    # ionization potential
+        self.scan_type = scan_types.NONE                # type of scan performed
+    
 
 
     def read_scan_files(self, files=None, bfile='', use_steps=slice(None)):
@@ -381,13 +399,7 @@ class RABBITT_scan():
         '''Saves the raw or inverted VMI images of the scan'''
             
         filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
-            
-        root = tk.Tk()
-        root.withdraw()
-        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
-                                 filetypes=filetypes)
-        root.destroy()    
-        print("Saving at: " + path)
+        path = util.select_file("save", title='Save as', filetypes=filetypes)
         
         if path.split(".")[-1] == "npy": # Save as numpy binary file
             if include_inverted: np.save(path, self.scan)
@@ -402,25 +414,18 @@ class RABBITT_scan():
 
 
 
-    def read_scan_images(self, files=None):
-        '''Reads h5 or npy files containing the raw VMI images of the scan'''
+    def read_scan_images(self, file=None):
+        '''Reads h5 or npy file containing the raw VMI images of the scan'''
         
-        if type(files) is str:
-            files = [files]
+        filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
+        file = util.select_file('open', file, title='Open scan file containing raw VMI images',
+                                filetypes=filetypes)
         
-        if files is None:
-            filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
-            root = tk.Tk()
-            root.withdraw()
-            path = askopenfilename(title='Open scan file containing raw VMI images', 
-                                   defaultextension=".h5", filetypes=filetypes)
-            root.destroy()    
+        if file.split(".")[-1] == "npy": # Read numpy binary file
+            self.scan = np.load(file)
         
-        if path.split(".")[-1] == "npy": # Read numpy binary file
-            self.scan = np.load(path)
-        
-        elif path.split(".")[-1] == "h5": # Read from h5 dataset
-            with h5py.File(path, "r") as f:
+        elif file.split(".")[-1] == "h5": # Read from h5 dataset
+            with h5py.File(file, "r") as f:
                 self.scan = np.array(f['scan'])      
         
         self.nsteps = len(self.scan)
@@ -473,8 +478,8 @@ class RABBITT_scan():
 
 
 
-    def perform_abel_inversion(self, origin=default_origin,
-                               theta=(-np.pi,+np.pi), order=6, odd_orders=True):
+    def perform_abel_inversion(self, origin=None, theta=(-np.pi,+np.pi), 
+                               order=6, odd_orders=True, save_internal=True):
         """
         Performs an Abel inversion of the individual VMI images to obtain the speed distributions.
         
@@ -483,7 +488,9 @@ class RABBITT_scan():
         Parameters
         ----------
         origin : 2-tuple of int, optional
-            Image center in pixels. The default can be set globally.
+            Image center in pixels. The default is None, which falls back to 
+            the origin saved in the dataclass, specifying origin here will 
+            also overwrite this.
             
         theta : 2-tuple of float
             Angle range for the integration (radians).
@@ -497,30 +504,54 @@ class RABBITT_scan():
         
         odd_orders : bool
             Include odd angular orders (by default is True)
+        
+        save_internal : bool
+            By default (True), the abel inversion results are written to class
+            variables. For direct use this is almost always the intended option.
+            If set to False, the results will only be returned and a possibly
+            existing inversion will not be overwritten.
+            This option is deprecated as no longer needed in RABBITT class and
+            may be removed soon.
 
         Returns
         -------
-        None.
-    
+        speed_distributions : 2D np.array
+            The speeds obtained from abel inversion (integrated over angle).
+            
+        speed_distribution : 1D np.array
+            The average speeds obtained from abel inversion (integrated over 
+            angle and scan parameter).
         """
         
         if self.scan is None:
             message = "No scan loaded to perform Abel inversion on."
             raise AttributeError(message)
         
-        self.inverted_scan = np.zeros((self.nsteps,1920,1200))
-        self.speed_distributions = np.zeros((self.nsteps,600))
+        if origin is None:
+            origin = self.origin
+        
+        inverted_scan = np.zeros((self.nsteps,1920,1200))
+        speed_distributions = np.zeros((self.nsteps,600))
         
         for i, VMI_image in tqdm(enumerate(self.scan), total=self.nsteps):
             recon = abel.rbasex.rbasex_transform(self.scan[i].T, origin=origin[::-1], 
-                                                     order=order, odd=odd_orders)
-            self.inverted_scan[i] = recon[0].T
+                                                     order=order, odd=odd_orders,
+                                                     basis_dir='')
+            inverted_scan[i] = recon[0].T
         
-            #speeds = abel.tools.vmi.angular_integration_3D(self.inverted_scan[i])
-            speeds = vmi_radial_intensity('int3D', self.inverted_scan[i], origin=origin,
+            speeds = vmi_radial_intensity('int3D', inverted_scan[i], origin=origin,
                                           theta_low=theta[0], theta_high=theta[1])
-            self.speed_distributions[i] = speeds[1][:600]
-            self.speed_distribution = normalized(self.speed_distributions.sum(axis=0))
+            speed_distributions[i] = speeds[1][:600]
+            speed_distribution = normalized(speed_distributions.sum(axis=0))
+        
+        if save_internal:
+            self.origin = origin
+            self.theta_range = theta
+            self.inverted_scan = inverted_scan
+            self.speed_distributions = speed_distributions
+            self.speed_distribution = speed_distribution
+        
+        return speed_distributions, speed_distribution
 
 
 
@@ -543,11 +574,8 @@ class RABBITT_scan():
         """
         filetypes = [('HDF5 dataset','*.h5'), ('Numpy array','*.npy')]
             
-        root = tk.Tk()
-        root.withdraw()
-        path = askopenfilename(title='Open scan file containing inverted VMI images', 
-                               defaultextension=".h5", filetypes=filetypes)
-        root.destroy()    
+        path = util.select_file('open', title='Open scan file containing inverted VMI images', 
+                                filetypes=filetypes)    
         
         if path.split(".")[-1] == "npy": # Read numpy binary file
             self.inverted_scan = np.load(path)
@@ -680,35 +708,34 @@ class RABBITT_scan():
     def save_energy_scale(self):
         '''saves the energy scale and peak locations of a scan'''
         
-        filetypes = [('HDF5 dataset','*.h5')]
-            
-        root = tk.Tk()
-        root.withdraw()
-        path = asksaveasfilename(title='Save as', defaultextension=".h5", 
-                                 filetypes=filetypes)
-        root.destroy()    
-        print("Saving at: " + path)
+        path = util.select_file("save", title='Save energy scale as')
         
         if path.split(".")[-1] == "h5": # Save as h5 dataset
             with h5py.File(path, "w") as f:
-                f.create_dataset("speed_axis", data=self.speed_axis)
-                f.create_dataset("energy_axis", data=self.energies)
-                f.create_dataset("velocity_axis", data=self.velocity_axis)
-                f.create_dataset("harmonic_locations", data=self.harmonics)
-                f.create_dataset("harmonic_orders", data=self.n_harmonics)
-                f.create_dataset("sideband_locations", data=self.sidebands)
-                f.create_dataset("sideband_orders", data=self.n_sidebands)
+                f.create_dataset("speed_axis", data=self.speed_axis).attrs.update({
+                                    "description": "Radial position in abel inverted image",
+                                    "unit": "pixels"})
+                f.create_dataset("energy_axis", data=self.energies).attrs.update({
+                                    "description": "Photoelectron energies",
+                                    "unit": "eV"})
+                f.create_dataset("velocity_axis", data=self.velocity_axis).attrs.update({
+                                    "description": "Photoelectron velocities",
+                                    "unit": "m/s"})
+                f.create_dataset("harmonic_locations", data=self.harmonics).attrs.update({
+                                    "description": "Position of harmonic peaks",
+                                    "units": "pixels"})
+                f.create_dataset("harmonic_orders", data=self.n_harmonics).attrs.update({
+                                    "description": "Order of harmonic peaks"})
+                f.create_dataset("sideband_locations", data=self.sidebands).attrs.update({
+                                    "description": "Position of sideband peaks",
+                                    "units": "pixels"})
+                f.create_dataset("sideband_orders", data=self.n_sidebands).attrs.update({
+                                    "description": "Order of sideband peaks"})
     
     def read_energy_scale(self, file=None):
         '''Reads h5 files containing the energy calibration'''
             
-        if file is None:
-            filetypes = [('HDF5 dataset','*.h5')]
-            root = tk.Tk()
-            root.withdraw()
-            file = askopenfilename(title='Open file containing energy scale', 
-                                   defaultextension=".h5", filetypes=filetypes)
-            root.destroy()    
+        file = util.select_file('open', file, title='Open file containing energy scale')
         
         if file.split(".")[-1] == "h5": # Read from h5 dataset
             with h5py.File(file, "r") as f:
@@ -723,8 +750,7 @@ class RABBITT_scan():
         # Multiplying by Jacobi determinant for plotting of PES
         self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
         self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
-    
-    
+     
     
     def time_scale(self, step, step_unit='um'):
         """
@@ -733,29 +759,21 @@ class RABBITT_scan():
 
         """
         
+        warnings.warn("time_scale() is deprecated and may be removed, use phase_scale() instead",
+                      DeprecationWarning, stacklevel=2)
         return self.phase_scale(step, step_unit)
+    
 
 
-    def phase_scale(self, step, step_unit='um'):
+    def _calculate_asymmetry_parameter(self, origin=default_origin):
         """
-        Define the axis for the scan parameter of the delay stage or CEP wedge.
+        Calculates signal difference between top and bottom half of the image.
+        TODO: this method is still in development
 
         Parameters
         ----------
-        step : float
-            Step size used by the piezo in µm,
-            phase step by the stabilization system in mrad,
-            or CEP wedge step distance in mm.
-            Choose which to specify with step_unit.
-        
-        step_unit: 'um', 'mrad', 'mm'
-            Choose which one to specify. Default is 'um'.
-        
-        Notes
-        -----
-        If 'um' or 'mrad' is specified, the class will assume a delay scan,
-        if 'mm' is specified, the class will treat this scan as a CEP scan.
-        
+        origin : 2-tuple of int, optional
+            Image center in pixels. The default can be set globally.
 
         Returns
         -------
@@ -763,35 +781,490 @@ class RABBITT_scan():
 
         """
         
-        if step_unit == 'um':
-            self.scan_type = self.types.DELAY
-            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
-            delta_x = step                       # step size in µm
-            delta_t = step*1e-6 * 2 / c * 1e15   # step size in fs
-            delta_phi = omega_IR * delta_t       # step size in rad
-    
-        elif step_unit == 'mrad':
-            self.scan_type = self.types.DELAY
-            print('Delay scan with ' + str(self.nsteps) + ' delay steps')
-            delta_phi = step * 1e-3              # step size in rad
-            delta_t = delta_phi / omega_IR       # step size in fs
-            delta_x = delta_t/1e15 * c * 1e6/2   # step size in µm
-        
-        elif step_unit == 'mm':
-            self.scan_type = self.types.CEP
-            print('CEP scan with ' + str(self.nsteps) + ' CEP steps')
-            delta_x = step                                           # step size in mm
-            delta_phi = step*CEP_factor / (lambda_IR*1e3) * 2*np.pi  # step size in rad
-            delta_t = delta_phi / omega_IR
+        for i, inverted_image in tqdm(enumerate(self.inverted_scan), total=self.nsteps):
+            top_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
+                                            theta_low=0, theta_high=np.pi)[1]
+            low_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
+                                            theta_low=-np.pi, theta_high=0)[1]
+            parameter = (top_half - low_half)
+            self.speed_distributions[i] = parameter[:600]
             
-        else: raise ValueError('Given step type not supported, try e.g. "um" or "mrad"')
+            self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
+            self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
+    
+
+
+    def calibrate_detector_efficiency(self, pixel_threshold=3, origin=default_origin,
+                                      saving=True, apply=True):
+        """
+        Calculates signal difference between top and bottom half of the image.
+        TODO: this method is still in development
+
+        Parameters
+        ----------
+        origin : 2-tuple of int, optional
+            Image center in pixels. The default can be set globally.
+        pixel_threshold : int or float
+            Minimal signal per pixel for a correction to be calculated.
+            For pixels below threshold the factor will be set to 1.
+        saving : bool, optional
+            Save the correction map as h5 file. The default is True.
+        apply : bool, optional
+            Directly apply the calculated map to the raw scan. The default is True.
+
+        Returns
+        -------
+        corr_map : np.array
+            Map which can be applied to correct for detector efficiency.
+
+        """
         
-        self.distances = np.linspace(0, self.nsteps*delta_x, self.nsteps)
-        self.times = np.linspace(0, self.nsteps*delta_t, self.nsteps)
-        self.angles = np.linspace(0, self.nsteps*delta_phi, self.nsteps)
+        avg_image = self.scan.mean(axis=0)
+        dims = avg_image.shape
+        
+        i = min(origin[1], dims[1]-origin[1])
+        half1 = avg_image[:,origin[1]-i:origin[1]]
+        half2 = np.flip(avg_image[:,origin[1]:origin[1]+i], axis=1)
+        
+        signal_map = np.minimum(half1, half2)
+        ratio_map = half1 / half2
+        eff_map = np.where(signal_map>pixel_threshold, ratio_map, 1)
+        
+        plt.figure(clear=True)
+        plt.imshow(eff_map.T, cmap='PiYG')
+        plt.colorbar()
+        plt.clim(0.8,1.2)
+        plt.show()
+        
+        self.corr_map = np.ones_like(avg_image, dtype=float)
+        self.corr_map[:,origin[1]-i:origin[1]] = 1/eff_map
+        
+        if saving:     # Save the correction map
+            path = util.select_file("save", title='Save correction map as')
+            with h5py.File(path, "w") as f:
+                f.create_dataset("map", data=self.corr_map)
+        
+        if apply:
+            self.scan = self.scan * self.corr_map
+        
+        return self.corr_map
     
     
     
+    def rotate_raw_image(self, angle):
+        """
+        Rotates the raw VMI image in mathematically positive direction 
+        (meaning anticlockwise).
+
+        Parameters
+        ----------
+        angle : float
+            The rotation angle in degrees.
+
+        Returns
+        -------
+        None.
+
+        """
+        self.scan = ndi.rotate(self.scan, angle, axes=(1,2), reshape=False, order=1, mode='nearest')
+    
+    
+    
+    def correct_detector_efficiency(self, correct_half="bottom", min_counts=3,
+                                    smooth_sigma=3, clip_range=(0.8, 1.6), exclude_center=True,
+                                    plotting=True, saving=True, apply=True):
+        """
+        Calculates signal difference between top and bottom half of the image.
+        (Lightly adapted from Jahanzeb)        
+
+        Parameters
+        ----------
+        correct_half : str, optional
+            The half of the image ("top" or "bottom")to use as a reference. 
+            The opposite side will be corrected to look the same. 
+            The default is "bottom".
+        min_counts : int or float, optional
+            Minimal signal per pixel for a correction to be calculated.
+            For pixels below threshold the factor will be set to 1.
+        smooth_sigma : int, optional
+            Size of a gaussian filter used to smooth the output. 
+            The default is 3.
+        clip_range : 2-tuple of float, optional
+            Upper and lower limit for the pixel-wise correction factors. 
+            The default is (0.8, 1.6).
+        exclude_center : bool, optional
+            Exclude the center line from this calculation. The default is True.
+        plotting : bool, optional
+            Show some diagnostic plots. The default is True.
+        saving : bool, optional
+            Save the correction map as h5 file. The default is True.
+        apply : bool, optional
+            Directly apply the calculated map to the raw scan. The default is True.
+
+        Raises
+        ------
+        ValueError
+            If correct image half is not selected.
+
+        Returns
+        -------
+        corr_map : np.array
+            Map which can be applied to correct for detector efficiency.
+        
+        Note
+        ----
+        This method was in large portions written by AI.
+
+        """
+        
+        avg_raw_delay = self.scan.mean(axis=0)
+        
+        
+        c = self.origin[1]               # split index along axis=1
+        ny = avg_raw_delay.shape[1]
+        eps = 1e-12
+
+        if exclude_center:
+            m = min(c, ny - (c + 1))
+            # same orientation you used before:
+            bot_slice = slice(c - m, c)           # left side of split
+            top_slice = slice(c + 1, c + 1 + m)   # right side of split
+        else:
+            m = min(c, ny - c - 1)
+            top_slice = slice(c - m, c + 1)
+            bot_slice = slice(c, c + m + 1)
+
+        print("split index c =", c)
+        print("paired half-width m =", m)
+        print("bot_slice =", bot_slice)
+        print("top_slice =", top_slice)
+
+        top = avg_raw_delay[:, top_slice].astype(float)
+        bot = avg_raw_delay[:, bot_slice].astype(float)
+
+        # mirror paired pixels
+        bot_mirrored_to_top = bot[:, ::-1]
+        top_mirrored_to_bot = top[:, ::-1]
+
+        self.corr_map = np.ones_like(avg_raw_delay, dtype=float)
+
+        if correct_half.lower() == "top":
+            # scale TOP to match BOTTOM
+            ratio_raw = np.ones_like(top, dtype=float)
+            valid = (top > min_counts) & (bot_mirrored_to_top > min_counts)
+            ratio_raw[valid] = bot_mirrored_to_top[valid] / (top[valid] + eps)
+
+            ratio_smooth = ratio_raw.copy()
+            ratio_smooth[~valid] = 1.0
+            ratio_smooth = ndi.gaussian_filter(ratio_smooth, sigma=smooth_sigma)
+            ratio_smooth[~valid] = 1.0
+            ratio_smooth = np.clip(ratio_smooth, clip_range[0], clip_range[1])
+
+            self.corr_map[:, top_slice] = ratio_smooth
+
+        elif correct_half.lower() == "bottom":
+            # scale BOTTOM to match TOP
+            ratio_raw = np.ones_like(bot, dtype=float)
+            valid = (bot > min_counts) & (top_mirrored_to_bot > min_counts)
+            ratio_raw[valid] = top_mirrored_to_bot[valid] / (bot[valid] + eps)
+
+            ratio_smooth = ratio_raw.copy()
+            ratio_smooth[~valid] = 1.0
+            ratio_smooth = ndi.gaussian_filter(ratio_smooth, sigma=smooth_sigma)
+            ratio_smooth[~valid] = 1.0
+            ratio_smooth = np.clip(ratio_smooth, clip_range[0], clip_range[1])
+
+            self.corr_map[:, bot_slice] = ratio_smooth
+
+        else:
+            raise ValueError("CORRECT_HALF must be 'top' or 'bottom'")
+
+        print("valid pixels:", int(np.sum(valid)), "/", valid.size, f"({100*np.sum(valid)/valid.size:.2f}%)")
+        print("ratio_raw min/max/mean:", np.min(ratio_raw), np.max(ratio_raw), np.mean(ratio_raw))
+        print("ratio_smooth min/max/mean:", np.min(ratio_smooth), np.max(ratio_smooth), np.mean(ratio_smooth))
+        print("corr_map min/max/mean:", np.min(self.corr_map), np.max(self.corr_map), np.mean(self.corr_map))
+
+        if plotting:    # Diagnostics for corr_map
+            fig, axs = plt.subplots(2, 3, figsize=(14, 8))
+    
+            axs[0, 0].set_title("Delay avg raw")
+            axs[0, 0].imshow(avg_raw_delay.T, origin='lower', aspect='auto')
+            axs[0, 0].axhline(self.origin[1], color='w', ls='--', lw=0.8)
+    
+            axs[0, 1].set_title("Correction map (full)")
+            im1 = axs[0, 1].imshow(self.corr_map.T, origin='lower', aspect='auto',
+                                   cmap='PiYG', vmin=0.8, vmax=1.2)
+            axs[0, 1].axhline(self.origin[1], color='k', ls='--', lw=0.8)
+            plt.colorbar(im1, ax=axs[0, 1], fraction=0.046, pad=0.04)
+    
+            axs[0, 2].set_title("Valid mask")
+            axs[0, 2].imshow(valid.T, origin='lower', aspect='auto', cmap='gray')
+    
+            axs[1, 0].set_title("ratio_raw")
+            im2 = axs[1, 0].imshow(ratio_raw.T, origin='lower', aspect='auto',
+                                   cmap='PiYG', vmin=clip_range[0], vmax=clip_range[1])
+            plt.colorbar(im2, ax=axs[1, 0], fraction=0.046, pad=0.04)
+    
+            axs[1, 1].set_title("ratio_smooth")
+            im3 = axs[1, 1].imshow(ratio_smooth.T, origin='lower', aspect='auto',
+                                   cmap='PiYG', vmin=clip_range[0], vmax=clip_range[1])
+            plt.colorbar(im3, ax=axs[1, 1], fraction=0.046, pad=0.04)
+    
+            axs[1, 2].set_title("Histogram of correction factors")
+            axs[1, 2].hist(ratio_smooth[np.isfinite(ratio_smooth)].ravel(), bins=100)
+            axs[1, 2].axvline(1.0, color='r', ls='--', lw=1)
+            axs[1, 2].set_xlabel("factor")
+    
+            plt.tight_layout()
+            plt.show()
+        
+        if saving:     # Save the correction map
+            path = util.select_file("save", title='Save correction map as')
+            with h5py.File(path, "w") as f:
+                f.create_dataset("map", data=self.corr_map)
+        
+        if apply:
+            self.scan = self.scan * self.corr_map
+         
+        return self.corr_map
+    
+    
+    
+    def read_detector_efficiency_map(self, file=None):
+        """
+        Apply a previously calculated efficiency map to the raw data.
+
+        Parameters
+        ----------
+        file : str, optional
+            Path to h5 file containing the correction map.
+            If not specified open file selection dialog.
+
+        Returns
+        -------
+        None.
+
+        """
+        
+        file = util.select_file('open', file, title='Open file containing detector efficiency map')
+        
+        if file.split(".")[-1] == "h5": # Read from h5 dataset
+            with h5py.File(file, "r") as f:
+                self.corr_map = np.array(f['map'])
+        
+        self.scan = self.scan * self.corr_map
+        
+        
+    
+    
+@dataclass
+class RABBITT_scan(AxisHelper):
+    """
+    RABBITT scan that can either:
+    • delegate axes/metadata to a VMI_scan (read-only, always in sync), or
+    • own its data when constructed from explicit arrays or other sources.
+    
+    
+    Public attributes (times, energies, etc.) form a stable API independent
+    of the data source.
+    """
+    #TODO: is this description complete? the one for VMI class should be already!
+    
+    # Option A — VMI input
+    vmi: Optional["VMI_scan"] = None
+    theta_range: Optional[Tuple[float, float]] = None
+
+    # Option B — direct data input
+    data: Optional[np.ndarray] = None
+    
+    # private backing storage for owned data
+    _energies: Optional[np.ndarray] = field(default=None, repr=False)
+    _times: Optional[np.ndarray] = field(default=None, repr=False)
+    _angles: Optional[np.ndarray] = field(default=None, repr=False)
+    _nsteps: Optional[int] = field(default=None, repr=False)
+    
+    # Define what belongs to VMI (This list includes axes & metadata)
+    DELEGATED_ATTRS = {
+        'times', 'angles', 'distances', 'energies', 'speed_axis', 'velocity_axis', 
+        'nsteps', 'origin', 'scan_type'
+    }
+    
+    # Global options
+    min_energy: float = 0                                   # lower energy limit for plotting
+    max_energy: float = 19                                  # upper energy limit for plotting
+    name: str = ''                                          # name for some plots etc
+    
+    HH_oscillation: np.ndarray | None = None                # signal oscillation averaged over each HH
+    SB_oscillation: np.ndarray | None = None                # signal oscillation averaged over each SB
+    HH_intensities: np.ndarray | None = None                # intensitiy of each HH
+    SB_intensities: np.ndarray | None = None                # intensitiy of each SB
+    
+    # --- Normalized / differential data ---
+    data_norm: np.ndarray | None = None                     # speed distributions normalized
+    data_diff: np.ndarray | None = None                     # speed distribution differences from average
+    data_smooth: np.ndarray | None = None                   # speed distributions smoothed
+    
+    # --- Speed distributions ---
+    speed_distributions: np.ndarray | None = None           # speed distributions obtained from angular integration of inverted images
+    speed_distribution: np.ndarray | None = None            # single speed distribution integrated over array
+    speed_distributions_jacobi: np.ndarray | None = None    # speed distributions multiplied by jacobi determinant
+    speed_distribution_jacobi: np.ndarray | None = None     # integrated speed distribution multiplied by jacobi determinant
+    speed_distribution_norm: np.ndarray | None = None       # normalized speed distribution (integral is 1)
+    
+    # --- Harmonics & sidebands ---
+    harmonics: np.ndarray | None = None                     # pixel positions of HH-peaks
+    sidebands: np.ndarray | None = None                     # pixel positions of SB-peaks
+    n_harmonics: np.ndarray | None = None                   # order of HH
+    n_sidebands: np.ndarray | None = None                   # order of SB
+    left: np.ndarray | None = None                          # left edges of sidebands
+    right: np.ndarray | None = None                         # right edges of sidebands
+    
+    # --- Energy-resolved results for oscillations ---
+    phase_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    phase_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    depth_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    depth_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    slope_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    slope_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    contrast_by_energy: np.ndarray = field(default_factory=lambda: np.array([]))
+    contrast_by_energy_error: np.ndarray = field(default_factory=lambda: np.array([]))
+    
+    # --- Fit results for integrated sidebands ---
+    phases: np.ndarray | None = None
+    phase_errors: np.ndarray | None = None
+    cos_fit_popts: np.ndarray | None = None
+
+    def __getattr__(self, name):
+        """
+        Dynamically delegate attribute access to self.vmi if:
+        1. The attribute is in DELEGATED_ATTRS list, AND
+        2. self.vmi actually exists (is not None).
+        """
+        # Prevent infinite recursion if __init__ hasn't finished yet or vmi is missing
+        if name in self.DELEGATED_ATTRS:
+            if self.vmi is not None:
+                return getattr(self.vmi, name)
+            else:
+                # If RABBITT owns its own data (e.g., self._times), check for it.
+                private_attr = f"_{name}"
+                if hasattr(self, private_attr):
+                    return getattr(self, private_attr)
+        
+        # If not found and not delegated, raise the standard error
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
+
+    def __setattr__(self, name, value):
+        """
+        Prevent overwriting attributes if they are delegated to self.vmi.
+        This replaces the individual @property.setter logic.
+        """
+        # If we are setting 'vmi' itself, allow it (otherwise we break initialization)
+        if name == 'vmi':
+            super().__setattr__(name, value)
+            return
+
+        # If we are setting a delegated attribute and we rely on VMI, block it.
+        if name in self.DELEGATED_ATTRS and hasattr(self, 'vmi') and self.vmi is not None:
+            raise AttributeError(
+                f"'{name}' is read-only when sourced from VMI. "
+                "You cannot overwrite calibration data."
+            )
+            
+        # Otherwise, set the attribute normally (e.g., self._times, self.data, etc.)
+        super().__setattr__(name, value)
+
+    def __post_init__(self):
+        """Initialize depending on which input was supplied."""
+
+        # Case 1 — Construct from VMI
+        if self.vmi is not None:
+            self._build_from_vmi()
+            return
+
+        # Case 2 — Construct from explicit arrays
+        elif self.data is not None:
+            if self.energies is None:
+                raise ValueError("Must provide energies with data.")
+            
+            self.nsteps = self.data.shape[0]
+            self.scan_type = scan_types.NONE          # type of scan performed
+            self.speed_distributions_jacobi = self.data
+            self.speed_distribution_jacobi = normalized(self.data.sum(axis=0))
+            self.speed_axis = np.arange(len(self.speed_distribution_jacobi))
+            self.velocity_axis = np.sqrt(2 * self.energies / m_e) / 1e3
+            return
+
+        # No valid input
+        raise ValueError("RABBITT_scan must be given either vmi or data + energies.")
+    
+
+    def _build_from_vmi(self):
+        """Internal helper to extract a RABBITT trace from a VMI_Scan."""
+        
+        if self.theta_range is not None:   # do angular integration here
+            if self.vmi.inverted_scan is None:
+                raise AttributeError("Must have already performed Abel inversion.")
+            inverted_scan = self.vmi.inverted_scan
+
+            speed_distributions = np.zeros((self.nsteps,600))
+            for i, VMI_image in tqdm(enumerate(inverted_scan), total=self.nsteps):
+                speeds = vmi_radial_intensity('int3D', inverted_scan[i], origin=self.origin,
+                                              theta_low=self.theta_range[0], theta_high=self.theta_range[1])
+                speed_distributions[i] = speeds[1][:600]
+            self.speed_distributions = speed_distributions
+            self.speed_distribution = normalized(speed_distributions.sum(axis=0))
+                
+        else:   # use angles and integation from VMI class to save processor time
+            self.speed_distributions, self.speed_distribution = \
+                self.vmi.speed_distributions, self.vmi.speed_distribution
+            self.theta_range = self.vmi.theta_range
+            
+        theta_range_deg = np.astype(np.round(np.array(self.theta_range)*180/np.pi), int)
+        self.name = self._prefix() + '' + str(theta_range_deg[0]) + '°-' + str(theta_range_deg[1]) + '°'
+        
+        self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
+        self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
+        
+        self.harmonics, self.sidebands = self.vmi.harmonics, self.vmi.sidebands
+        self.n_harmonics, self.n_sidebands = self.vmi.n_harmonics, self.vmi.n_sidebands
+            
+    
+    
+    def _prefix(self):
+        '''changes the name like "name: " to create separate plots for each intance of the class'''
+        if self.name is None or self.name == '':
+            return ''
+        else:
+            return str(self.name) + ': '
+        
+      
+    def _legend_name(self, order, pre='SB'):
+        '''returns names as 'SB14' for plot legends'''
+        if type(order) in (int, float, np.float64):
+            return pre + str(np.round(order, 1))
+        elif type(order) in (np.ndarray, list, tuple):
+            return ['SB' + str(np.round(o, 1)) for o in order]
+
+
+    
+    def set_energy_limit(self, limit=None, left_limit=None):
+        '''allows to set an energy limit up to which structure is visible in the spectrum
+            this will be used as axis limit in all plots'''
+
+        if limit is None:
+            self.max_energy = float(np.max(self.energies))
+        else:
+            self.max_energy = float(limit)
+        assert isinstance(self.max_energy, float), "energy limit has to be float"
+
+        if left_limit is None:
+            self.min_energy = 0.0
+        else:
+            self.min_energy = float(left_limit)
+        assert isinstance(self.min_energy, float), "left energy limit has to be float"
+
+
+
     def plot_oscillation(self, oscillation, labels=None, popts=None, fig_number=None, 
                          delay_unit='fs', size_hor=10, size_ver=8, saving=False):
         '''plots multiple oscillations in seperate subplots with line coloring showing their energies,
@@ -804,8 +1277,6 @@ class RABBITT_scan():
         
         if popts is not None:
             fit_x_axis = np.linspace(x_axis[0], x_axis[-1], 1000)
-            def cos(t, omega, phi, a, b): # fittable cosine with linear background
-                return a * np.cos(omega*omega_IR * t - phi) + b * t
     
         # plot multiple oscillations in one figure
         if len(np.shape(oscillation)) == 2:
@@ -820,7 +1291,7 @@ class RABBITT_scan():
                     pl, = ax0.plot(x_axis, oscillation[n_subfigs-1-i]*scaling, 'x-', 
                                    lw=0.8, ms=6, color=colors[n_subfigs-1-i])
                     if popts is not None:
-                        pl, = ax0.plot(fit_x_axis, cos(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
+                        pl, = ax0.plot(fit_x_axis, cos_lin_bg(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
                                         lw=0.6, color=darker_colors[n_subfigs-1-i])
                     axl=ax0
                 else:
@@ -829,7 +1300,7 @@ class RABBITT_scan():
                     pl, = axi.plot(x_axis, oscillation[n_subfigs-1-i]*scaling, 'x-', 
                                    lw=0.8, ms=6, color=colors[n_subfigs-1-i])
                     if popts is not None:
-                        pl, = axi.plot(fit_x_axis, cos(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
+                        pl, = axi.plot(fit_x_axis, cos_lin_bg(fit_x_axis, *popts[n_subfigs-1-i])*scaling,
                                         lw=0.6, color=darker_colors[n_subfigs-1-i])
     
                     yticks = axi.yaxis.get_major_ticks()
@@ -863,8 +1334,41 @@ class RABBITT_scan():
     
     def plot_RABBITT_trace(self, data_2D, fig_number=None, clabel='counts', cmap='jet', 
                            delay_unit='n', energy_unit='n', clim=None, saving=False, figsize=None):
-        '''plots the RABBITT-trace as colormap;
-            no interpolation between datapoints is used to show the real resolution'''
+        """
+        Plots the RABBITT-trace as colormap.
+
+        Parameters
+        ----------
+        data_2D : 2D np.array
+            RABBITT scan to plot.
+        fig_number : int or str, optional
+            matplotlib fig_number. The default is None.
+        clabel : str, optional
+            Label for the colorbar. The default is 'counts'.
+        cmap : str, optional
+            Colormap. The default is 'jet'.
+        delay_unit : str, optional
+            Unit for the delay axis. The default is 'n', i.e. steps.
+        energy_unit : str, optional
+            Unit for the energy axis. The default is 'n', i.e. steps.
+        clim : 2-tuple or None, optional
+            Limits for the color scale. 
+            The default is None, which uses the range of values in data_2D.
+        saving : bool or str, optional
+            If true or a file format (pdf, png, svg) is specified saves the image
+            in that file format. True uses pdf format. The default is False.
+        figsize : 2-tuple or None, optional
+            matplotlib figsize. The default is None.
+
+        Returns
+        -------
+        None.
+        
+        Notes
+        -----
+        No interpolation between datapointsis used to show the real resolution.
+
+        """
 
         x_axis, x_label, _ = self._phase_axis(delay_unit)
         y_axis, y_label, _ = self._energy_axis(energy_unit)
@@ -892,22 +1396,23 @@ class RABBITT_scan():
         
         if saving is True or saving == "pdf":
             plt.savefig('trace.pdf')
-        elif  saving == "png":
+        elif saving == "svg":
+            plt.savefig('trace.svg')
+        elif saving == "png":
             plt.savefig('trace.png', dpi=300)
         
         plt.show()     
-
-
-
-    def _calculate_asymmetry_parameter(self, origin=default_origin):
+    
+    
+    
+    def save_RABBITT_trace(self, dataset=None):
         """
-        Calculates signal difference between top and bottom half of the image.
-        TODO: this method is still in development
+        Saves the RABBITT trace along with some additional info in a h5 file.
 
         Parameters
         ----------
-        origin : 2-tuple of int, optional
-            Image center in pixels. The default can be set globally.
+        dataset : 2D np.array, optional
+            The scan to save. The default is None, which saves the raw data.
 
         Returns
         -------
@@ -915,20 +1420,37 @@ class RABBITT_scan():
 
         """
         
-        for i, inverted_image in tqdm(enumerate(self.inverted_scan), total=self.nsteps):
-            top_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
-                                            theta_low=0, theta_high=np.pi)[1]
-            low_half = vmi_radial_intensity('int3D', inverted_image, origin=origin,
-                                            theta_low=-np.pi, theta_high=0)[1]
-            parameter = (top_half - low_half)
-            self.speed_distributions[i] = parameter[:600]
-            
-            self.speed_distribution_jacobi = self.speed_distribution / self.speed_axis
-            self.speed_distributions_jacobi = self.speed_distributions / self.speed_axis
-            
+        if dataset is None: # save raw dataset by default
+            dataset = self.speed_distributions_jacobi
+        
+        path = util.select_file("save", title='Save RABBITT trace as')
+        
+        if path.split(".")[-1] == "h5": # Save as h5 dataset
+            with h5py.File(path, "w") as f:
+                f.create_dataset("data", data=dataset).attrs.update({
+                                    "description": "Radial position in abel inverted image",
+                                    "unit": "pixels"})
+                f.create_dataset("energy_axis", data=self.energies).attrs.update({
+                                    "description": "Photoelectron energies",
+                                    "unit": "eV"})
+                f.create_dataset("delay_axis", data=self.times).attrs.update({
+                                    "description": "IR phase delay",
+                                    "unit": "rad"})
+                f.create_dataset("harmonic_locations", data=self.harmonics).attrs.update({
+                                    "description": "Position of harmonic peaks",
+                                    "units": "pixels"})
+                f.create_dataset("harmonic_orders", data=self.n_harmonics).attrs.update({
+                                    "description": "Order of harmonic peaks"})
+                f.create_dataset("sideband_locations", data=self.sidebands).attrs.update({
+                                    "description": "Position of sideband peaks",
+                                    "units": "pixels"})
+                f.create_dataset("sideband_orders", data=self.n_sidebands).attrs.update({
+                                    "description": "Order of sideband peaks"})
     
-    
-    def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None):
+
+
+    def prepare_analysis(self, integral_width=2, smoothE=None, smoothT=None, 
+                         normalize=True, use_diff=True):
         '''
         Normalizes data in a way that is useful for the RABBITT-analysis
         and extracts the integrals of sidband and harmonic signal.
@@ -949,6 +1471,15 @@ class RABBITT_scan():
             this can be specified to smooth the data along the time axis.
             The integer will specify the size of the smoothing kernel.
             The default is None, which deactivates smoothing along this axis.
+            
+        normalize: bool, optional
+            Whether to artificially set all delays to the same total intensity.
+            The default is true.
+            
+        use_diff: bool, optional
+            Whether to subtract the average photoelectron spectrum for a
+            count difference.
+            The default is true.
 
         Returns
         -------
@@ -959,7 +1490,10 @@ class RABBITT_scan():
         self.speed_distribution_norm = normalized(self.speed_distribution_jacobi, 'sum')
         
         # Normalize signal for each delay step
-        self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
+        if normalize:
+            self.data_norm = (self.speed_distributions_jacobi.T / np.nansum(self.speed_distributions_jacobi, axis=1)).T
+        else:
+            self.data_norm = self.speed_distributions_jacobi
         
         # Smooth data if specified
         if (smoothE is None) or (smoothE == 0):
@@ -970,8 +1504,11 @@ class RABBITT_scan():
             self.data_smooth = util.smooth_2D(self.data_norm, smoothT, smoothE)
         
         # Calculate changes from average signal
-        self.data_diff = self.data_smooth - normalized(np.nansum(self.data_smooth, axis=0), 'sum')
-        
+        if use_diff:
+            self.data_diff = self.data_smooth - np.nansum(self.data_smooth, axis=0)/self.nsteps
+        else:
+            self.data_diff = self.data_smooth
+           
         self.left  = self.sidebands - integral_width
         self.right = self.sidebands + integral_width+1
         
@@ -1104,15 +1641,15 @@ class RABBITT_scan():
         
         # Perform all the Fourier transforms
         fouriers = [np.fft.fft(single_line) for single_line in self.data_diff.T]
-        fourier_map = np.abs(fouriers)
+        self.fourier_map = np.abs(fouriers)
         fourier_phases = np.angle(fouriers)
-        fourier_spectrum = np.nansum(fourier_map, axis=0)
+        fourier_spectrum = np.nansum(self.fourier_map, axis=0)
         
         # Find oscillation frequency and extract phase there
         peak = np.argmax(fourier_spectrum[3:]) + 3
         print('Used fourier bin ' + str(peak))
         self.phase_by_energy = -fourier_phases.T[peak]
-        self.depth_by_energy = fourier_map.T[peak]
+        self.depth_by_energy = self.fourier_map.T[peak]
 
         # show corresponding plot
         if plotting == True:
@@ -1121,7 +1658,7 @@ class RABBITT_scan():
         return self.phase_by_energy
 
 
-    def do_cosine_fit(self, plotting=True, omega=2, average=0):
+    def do_cosine_fit(self, plotting=True, fit_function=cos_lin_bg, average=0):
         """
         Does a cosine fit for each energy bin 
         and extracts the phase of the oscillating component
@@ -1130,10 +1667,10 @@ class RABBITT_scan():
         ----------
         plotting : bool, optional
             Whether to directly plot the result. The default is True.
-        omega : int or float, optional
-            The frequency of the angular component to be fitted in units of omega_IR.
-            The default is 2, which captures RABBITT with harmonics spaced 2*E_IR.
-            Use 1 for harmonics spaced 1*E_IR or the Ti:Sa CEP scan.
+        fit_function : function, optional
+            The function to fit. First argument must be time parameter.
+            Second argument should be phase of interest, third its amplitude.
+            Default is a 2omega cosine with linear background.
         average : int, optional
             Specify >0 to average neighboring pixels when fitting for less noisy fits.
             The default is 0, meaning no averaging.
@@ -1155,9 +1692,6 @@ class RABBITT_scan():
         self.depth_by_energy_error = np.array([])
         self.slope_by_energy_error = np.array([])
         
-        def cos(t, phi, a, b): # fittable cosine with linear background
-            return a * np.cos(omega*omega_IR * t - phi) + b * t
-
         for i in range(len(self.data_diff.T)):
             if average == 0:
                 single_line = self.data_diff.T[i]
@@ -1166,7 +1700,7 @@ class RABBITT_scan():
             
             try:
                 ### perform cosine fit ###
-                popt, pcov = scipy.optimize.curve_fit(cos, self.times, single_line)
+                popt, pcov = scipy.optimize.curve_fit(fit_function, self.times, single_line)
                 perr = np.sqrt(np.diag(pcov))
                 print(popt)
     
@@ -1271,7 +1805,7 @@ class RABBITT_scan():
 
 
 
-    def phases_cosine(self, oscillation=None, labels=None, omega=2):
+    def phases_fit(self, oscillation=None, labels=None, fit_function=cos_lin_bg):
         """
         Fit the phases of sidebands (or harmonics) alredy integrated over a region.
     
@@ -1285,10 +1819,10 @@ class RABBITT_scan():
         labels : list of str, optional
             Labels for the plots representing the fits. 
             Per default or for None, sideband labels are generated and used.
-        omega : int or float, optional
-            The frequency of the angular component to be fitted in units of omega_IR.
-            The default is 2, which captures RABBITT with harmonics spaced 2*E_IR.
-            Use 1 for harmonics spaced 1*E_IR or the Ti:Sa CEP scan.
+        fit_function : function, optional
+            The function to fit. First argument must be time parameter.
+            Second argument should be phase of interest, third its amplitude.
+            Default is a 2omega cosine with linear background.
     
         Returns
         -------
@@ -1303,28 +1837,19 @@ class RABBITT_scan():
             oscillation = self.SB_oscillation
         if labels is None:
             labels = self._legend_name(self.n_sidebands)
-    
-        def cos(t, phi, a, b): # fittable cosine with linear background
-            return a * np.cos(omega*omega_IR * t - phi) + b * t
         
         self.phases = np.array([])
         self.phase_errors = np.array([])
         cos_fit_popts = []
-    
-        try: tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
-        except AttributeError: # time scale has not jet been calculated
-            self.time_steps() # calculate the time scale
-            tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
-    
+        tt = np.arange(0, self.times[-1], 0.0001) # finer time array for plotting
     
         for i in range(len(oscillation)):
     
             # perform cosine fit
-            normalization = np.max(np.abs(oscillation[i])) # to make initial guess closer
-            popt, pcov = scipy.optimize.curve_fit(cos, self.times, oscillation[i]/normalization)
-            popt[1:] *= normalization
+            popt, pcov = scipy.optimize.curve_fit(fit_function, self.times, 
+                                                  oscillation[i])
             # write down phase parameters
-            cos_fit_popts.append(np.append(omega, popt))
+            cos_fit_popts.append(popt)
             if popt[1] > 0:
                 self.phases = np.append(self.phases, (popt[0])%(2*np.pi))
             else:
@@ -1335,7 +1860,7 @@ class RABBITT_scan():
             # show corresponding plot
             plt.figure((self._prefix() + labels[i]), clear=True)
             plt.plot(self.times, oscillation[i], 'x-', color='r', label='measurement')
-            plt.plot(tt, cos(tt, *popt), color='b', label='fit')
+            plt.plot(tt, fit_function(tt, *popt), color='b', label='fit')
             plt.xlabel('assumed time [fs]')
             plt.ylabel('normalized count difference')
             plt.legend()
@@ -1345,30 +1870,35 @@ class RABBITT_scan():
         return self.phases, self.phase_errors
 
 
+    def phases_cosine(self, oscillation=None, labels=None):
+        """
+        Define the time axis given the steps size for the piezo in microns or radians.
+        Legacy alias - use the more flexible phases_fit.
+
+        """
+        return self.phases_fit(oscillation, labels, cos_lin_bg)
 
         
 #%% Example usage
 
 if __name__ == "__main__":
 
-    hasi = RABBITT_scan('Ar')                      # initialize scan object
+    hasi = VMI_scan('Ar')                          # initialize VMI scan object
     hasi.read_scan_files()                         # read .h5 measurement data 
     hasi.perform_abel_inversion(theta=(0, np.pi))  # abel invert, integrate upper image half
     
-#%%%
     hasi.energy_scale()                            # calibrate energy axis 
-    hasi.phase_scale(100, 'mrad')                  # apply phase axis
+    hasi.phase_scale(150, 'mrad')                  # apply phase axis
     
-    hasi.plot_RABBITT_trace(hasi.speed_distributions, delay_unit='fs', energy_unit='v')
-    hasi.plot_RABBITT_trace(hasi.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
+#%%%
+    hase = RABBITT_scan(hasi)                      # initialize RABBITT scan object
     
-    hasi.do_cosine_fit(plotting=False)             # cosine-fit for every energy
-    hasi.select_sideband_ranges(dist=10)           # select sb integration ranges
+    hase.plot_RABBITT_trace(hase.speed_distributions, delay_unit='fs', energy_unit='v')
+    hase.plot_RABBITT_trace(hase.speed_distributions_jacobi, delay_unit='fs', energy_unit='eV')
     
-    legend_names = [hasi._legend_name(n_SB) for n_SB in hasi.n_sidebands]
-    hasi.plot_oscillation(hasi.SB_oscillation, legend_names, hasi._prefix() + 'Sideband Oscillation')    
-        
-
+    hase.do_cosine_fit(plotting=False)             # cosine-fit for every energy
+    hase.select_sideband_ranges(dist=10)           # select sb integration ranges
     
-        
-        
+    legend_names = [hase._legend_name(n_SB) for n_SB in hase.n_sidebands]
+    hase.plot_oscillation(hase.SB_oscillation, legend_names, hase.cos_fit_popts, hase._prefix() + 'Sideband Oscillation')    
+    
