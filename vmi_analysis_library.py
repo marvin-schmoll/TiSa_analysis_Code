@@ -1068,9 +1068,7 @@ class RABBITT_scan(AxisHelper):
     Public attributes (times, energies, etc.) form a stable API independent
     of the data source.
     """
-    #TODO: below a list of what needs to be adressed before this version can be merged with main
-    #TODO3: is this description complete? the one for VMI class should be already!
-    #TODO6: make import of saved inverted spectra possible
+    #TODO: is this description complete? the one for VMI class should be already!
     
     # Option A — VMI input
     vmi: Optional["VMI_scan"] = None
@@ -1080,15 +1078,15 @@ class RABBITT_scan(AxisHelper):
     data: Optional[np.ndarray] = None
     
     # private backing storage for owned data
-    _times: Optional[np.ndarray] = field(default=None, repr=False)
     _energies: Optional[np.ndarray] = field(default=None, repr=False)
+    _times: Optional[np.ndarray] = field(default=None, repr=False)
+    _angles: Optional[np.ndarray] = field(default=None, repr=False)
     _nsteps: Optional[int] = field(default=None, repr=False)
     
-    # Define what belongs to VMI
-    # This list includes axes, metadata, and helper methods
+    # Define what belongs to VMI (This list includes axes & metadata)
     DELEGATED_ATTRS = {
         'times', 'angles', 'distances', 'energies', 'speed_axis', 'velocity_axis', 
-        'nsteps', 'origin', 'types', 'scan_type'
+        'nsteps', 'origin', 'scan_type'
     }
     
     # Global options
@@ -1147,7 +1145,7 @@ class RABBITT_scan(AxisHelper):
             if self.vmi is not None:
                 return getattr(self.vmi, name)
             else:
-                # Optional: If RABBITT owns its own data (e.g., self._times), check for it.
+                # If RABBITT owns its own data (e.g., self._times), check for it.
                 private_attr = f"_{name}"
                 if hasattr(self, private_attr):
                     return getattr(self, private_attr)
@@ -1185,8 +1183,8 @@ class RABBITT_scan(AxisHelper):
 
         # Case 2 — Construct from explicit arrays
         elif self.data is not None:
-            if self.times is None or self.energies is None:
-                raise ValueError("Must provide times and energies with data.")
+            if self.energies is None:
+                raise ValueError("Must provide energies with data.")
             
             self.nsteps = self.data.shape[0]
             self.scan_type = scan_types.NONE          # type of scan performed
@@ -1194,11 +1192,10 @@ class RABBITT_scan(AxisHelper):
             self.speed_distribution_jacobi = normalized(self.data.sum(axis=0))
             self.speed_axis = np.arange(len(self.speed_distribution_jacobi))
             self.velocity_axis = np.sqrt(2 * self.energies / m_e) / 1e3
-            # TODO: recalculate everything else needed?
             return
 
         # No valid input
-        raise ValueError("RABBITT_scan must be given either vmi or data + times + energies.")
+        raise ValueError("RABBITT_scan must be given either vmi or data + energies.")
     
 
     def _build_from_vmi(self):
@@ -1261,7 +1258,7 @@ class RABBITT_scan(AxisHelper):
         assert isinstance(self.max_energy, float), "energy limit has to be float"
 
         if left_limit is None:
-            self.min_energy = float(0)
+            self.min_energy = 0.0
         else:
             self.min_energy = float(left_limit)
         assert isinstance(self.min_energy, float), "left energy limit has to be float"
