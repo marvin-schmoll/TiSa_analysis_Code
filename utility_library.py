@@ -277,7 +277,7 @@ def select_file(operation="open", file=None, title='Select file',
               defaultextension=".h5", 
               filetypes=[('HDF5 dataset','*.h5')]):
     """
-    Wrapper around `tkinter.askopenfilename`. 
+    Wrapper around `tkinter.askopenfilename` and `tkinter.asksaveasfilename`. 
     If a file is specified will return it, otherwise open a tkinter file
     selection dialog.
 
@@ -306,19 +306,20 @@ def select_file(operation="open", file=None, title='Select file',
     if file is None:
         root = tk.Tk()
         root.withdraw()
+        
         if operation == "open":
             file = askopenfilename(title=title, defaultextension=defaultextension, 
                                    filetypes=filetypes)
+            if not os.path.isfile(file):
+                raise FileNotFoundError("File " + file  + " does not exist.")
+                
         elif operation == "save":
             file = asksaveasfilename(title=title, defaultextension=defaultextension, 
                                      filetypes=filetypes)
             print("Saving at: " + file)
+            
         else:
             raise AttributeError("Unrecognized file operation. Choose 'open' or 'save'.")
         root.destroy()
     
-    if not os.path.isfile(file):
-        raise FileNotFoundError("File " + file  + " does not exist.")
-    
     return file
-

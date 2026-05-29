@@ -687,10 +687,8 @@ class VMI_scan(AxisHelper):
         lowest_peak_energy = self.energies[peaks][0] + self.Ip
         lowest_peak_index = np.argmin(np.abs(lowest_peak_energy - expected_peak_energies))
         peak_orders = expected_peak_orders[lowest_peak_index:lowest_peak_index+len(peaks)]
-        harmonics = []
-        sidebands = []
-        n_harmonics = []
-        n_sidebands = []
+        harmonics, sidebands = [], []
+        n_harmonics, n_sidebands = [], [] 
         for i in range(len(peaks)):
             peak, n_peak = peaks[i], peak_orders[i]
             if n_peak%2 == 1: #odd orders
@@ -919,18 +917,15 @@ class VMI_scan(AxisHelper):
         
         avg_raw_delay = self.scan.mean(axis=0)
         
-        
         c = self.origin[1]               # split index along axis=1
         ny = avg_raw_delay.shape[1]
         eps = 1e-12
+        m = min(c, ny - (c + 1))
 
         if exclude_center:
-            m = min(c, ny - (c + 1))
-            # same orientation you used before:
             bot_slice = slice(c - m, c)           # left side of split
             top_slice = slice(c + 1, c + 1 + m)   # right side of split
         else:
-            m = min(c, ny - c - 1)
             top_slice = slice(c - m, c + 1)
             bot_slice = slice(c, c + m + 1)
 
@@ -1381,7 +1376,7 @@ class RABBITT_scan(AxisHelper):
         im.set_data(x_axis, y_axis, data_2D.T)
         ax.add_image(im)
         ax.set_xlim(x_axis[0], x_axis[-1])
-        if x_axis is self.energies:
+        if y_axis is self.energies:
             ax.set_ylim(self.min_energy, self.max_energy)
         else:
             ax.set_ylim(y_axis[0], y_axis[-1])
