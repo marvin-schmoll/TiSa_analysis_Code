@@ -50,6 +50,9 @@ default_origin = (971, 611)  # Change (!) here if VMI camera was moved i.e (967,
 scan_types = Enum('scan_type', [('NONE', None), ('DELAY', 0), ('CEP', 1)])
 
 
+def cos_no_bg(t, phi, a): # fittable cosine with no background
+    return a * np.cos(2*omega_IR * t - phi)
+
 def cos_lin_bg(t, phi, a, b): # fittable cosine with linear background
     return a * np.cos(2*omega_IR * t - phi) + b * t
 
@@ -497,15 +500,15 @@ class VMI_scan(AxisHelper):
             Angles are parametrized from -pi to +pi.
             Default is (-np.pi, +np.pi), which corresponds to the full range.
             
-        order : int
+        order : int, optional
             Highest angular order for rbasex evaluation, ≥ 0 (by default, 6). 
             Working with very high orders (≳ 15) can result in excessive noise,
             especially at small radii and for narrow peaks.
         
-        odd_orders : bool
+        odd_orders : bool, optional
             Include odd angular orders (by default is True)
         
-        save_internal : bool
+        save_internal : bool, optional
             By default (True), the abel inversion results are written to class
             variables. For direct use this is almost always the intended option.
             If set to False, the results will only be returned and a possibly
@@ -530,7 +533,7 @@ class VMI_scan(AxisHelper):
         if origin is None:
             origin = self.origin
         
-        inverted_scan = np.zeros((self.nsteps,1920,1200))
+        inverted_scan = np.zeros_like(self.scan, dtype=float)
         speed_distributions = np.zeros((self.nsteps,600))
         
         for i, VMI_image in tqdm(enumerate(self.scan), total=self.nsteps):
@@ -615,7 +618,7 @@ class VMI_scan(AxisHelper):
         peak_distance : int or float, optional
             Distance between peaks in harmonic orders.
             Change this if very strong sidebands get recognized by the peak finder.
-            The default is 2. This corresponds to no sidebands.
+            The default is 2/3. This corresponds to two sidebands.
         
         height : float, optional
             Minimum peak height for the the peak finder. The default is 0.1.
